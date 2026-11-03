@@ -51,13 +51,16 @@ class MessageUtils:
         if raw_message_id is not None:
             message_id = str(raw_message_id).strip()
             if message_id:
-                return f"id:{message_id}"
+                return f"id:{session_id}:{message_id}"
 
-        sender_id = event.get_sender_id() if hasattr(event, "get_sender_id") else ""
-        timestamp = getattr(getattr(event, "message_obj", None), "timestamp", 0)
-        fingerprint = f"{session_id}|{sender_id}|{timestamp}|{content}"
-        digest = hashlib.sha1(fingerprint.encode("utf-8")).hexdigest()
-        return f"fallback:{digest}"
+        # A repeated utterance is a distinct message. Missing native ID cannot
+        # support cross-restart dedup; only this event's shared local token can.
+        token = event.get_extra("_lm_capture_token",None)
+        if not token:
+            import uuid
+            token = uuid.uuid4().hex
+            event.set_extra("_lm_capture_token",token)
+        return f"event:{session_id}:{token}"
 
     async def is_duplicate_message(self, dedup_key: str | None) -> bool:
         """检查消息是否已经处理过（惰性过期 + 溢出时逐条淘汰）"""

@@ -71,6 +71,12 @@ class GraphExtractor:
                             "sender_id": str(item.get("sender_id") or ""),
                             "platform": str(item.get("platform") or "unknown"),
                             "aliases": aliases,
+                            "alias_observations": [{
+                                **({"adapter_id": metadata["adapter_id"]} if metadata.get("adapter_id") else {}),
+                                "session_id": metadata.get("session_id"),
+                                "persona_id": metadata.get("persona_id"),
+                                "aliases": list(dict.fromkeys([*aliases, display_name])),
+                            }],
                             "is_bot": bool(item.get("is_bot", False)),
                         },
                     )
@@ -174,6 +180,7 @@ class GraphExtractor:
                 "summary_schema_version": metadata.get("summary_schema_version"),
                 "graph_confidence": confidence,
                 "source_window": metadata.get("source_window"),
+                "recall_excluded": metadata.get("recall_excluded", False),
             }
             graph.entries.append(
                 GraphEntry(

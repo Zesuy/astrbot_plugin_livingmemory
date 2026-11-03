@@ -565,6 +565,16 @@
                     "max": 1000,
                     "step": 1
                 }
+            },
+            "summary_mode": {
+                "description": "记忆总结方式",
+                "hint": "events：客观事件与来源消息；persona：旧版第一人称人格回忆。回答时的聊天人格不受此项影响。",
+                "type": "string",
+                "default": "events",
+                "options": [
+                    "events",
+                    "persona"
+                ]
             }
         }
     },
@@ -1144,6 +1154,47 @@
                     "max": 1.0,
                     "step": 0.01
                 }
+            }
+        }
+    },
+    "archive": {
+        "type": "object",
+        "description": "独立原文档案（仅LLM工具查询，不自动注入）",
+        "items": {
+            "enabled": {
+                "type": "bool",
+                "default": false,
+                "description": "启用独立原文档案"
+            },
+            "query_enabled": {
+                "type": "bool",
+                "default": true,
+                "description": "注册query_chat_events工具"
+            },
+            "capture_mode": {
+                "type": "string",
+                "default": "inherit",
+                "options": [
+                    "off",
+                    "inherit",
+                    "permitted_all"
+                ],
+                "description": "收录策略；inherit继承原全量捕获开关"
+            },
+            "result_chars": {
+                "type": "int",
+                "default": 24000,
+                "description": "单次工具结果原文字符上限"
+            },
+            "max_candidates": {
+                "type": "int",
+                "default": 400,
+                "description": "主题检索候选上限"
+            },
+            "capture_queue_size": {
+                "type": "int",
+                "default": 512,
+                "description": "有界捕获队列容量"
             }
         }
     }

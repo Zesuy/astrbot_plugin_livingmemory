@@ -67,6 +67,7 @@ class PluginInitializer(InitializerFaissMixin, InitializerFinalizeMixin):
         self.memory_processor: MemoryProcessor | None = None
         self.db_migration: DBMigration | None = None
         self.conversation_manager: ConversationManager | None = None
+        self.shared_conversation_store = None
         self.index_validator: IndexValidator | None = None
         self.decay_scheduler: DecayScheduler | None = None
         self.consolidation_manager: MemoryConsolidationManager | None = None

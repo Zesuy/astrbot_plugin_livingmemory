@@ -17,10 +17,11 @@ def _memory_injection_content(content: Any, metadata: Any) -> str:
     """Prefer resolved live facts, otherwise retain the personality channel."""
     raw_content = str(content or "").strip()
     if isinstance(metadata, dict):
-        # Atom policies already resolved content against the current lifecycle.
-        # Parent summaries can still contain expired/forgotten facts.
-        if metadata.get("retrieved_atom_ids"):
+        if metadata.get("atom_policy_applied") is True or metadata.get("retrieved_atom_ids"):
             return raw_content
+        if metadata.get("summary_style") == "events":
+            return str(metadata.get("canonical_summary") or raw_content).strip()
+
         persona_summary = metadata.get("persona_summary")
         if isinstance(persona_summary, str) and persona_summary.strip():
             return persona_summary.strip()
@@ -47,6 +48,10 @@ def _memory_metadata_rows(metadata: dict) -> list[str]:
     """
     rows: list[str] = []
 
+    aliases = metadata.get("resolved_account_aliases")
+    if isinstance(aliases, list) and aliases:
+        rows.append("Observed account names (same ID; ambiguous entries remain separate): " + json.dumps(aliases, ensure_ascii=False))
+
     topics = metadata.get("topics", [])
     if topics and isinstance(topics, list) and len(topics) > 0:
         topics_str = "、".join(str(t) for t in topics if t)
@@ -59,12 +64,17 @@ def _memory_metadata_rows(metadata: dict) -> list[str]:
         if participants_str:
             rows.append(f"Participants: {participants_str}")
 
-    # Resolved atom content already lists the live facts. Parent key_facts have
-    # not been lifecycle-filtered, so emitting them would reintroduce old facts.
-    key_facts = (
-        [] if metadata.get("retrieved_atom_ids") else metadata.get("key_facts", [])
-    )
-    if key_facts and isinstance(key_facts, list) and len(key_facts) > 0:
+    key_facts = metadata.get("key_facts", [])
+    # Parent key facts have no per-fact lifecycle state. Once atom policy has
+    # supplied live content, adding them would bypass that policy (and repeat
+    # facts already in the body).
+    if (
+        metadata.get("atom_policy_applied") is not True
+        and not metadata.get("retrieved_atom_ids")
+        and metadata.get("summary_style") != "events"
+        and isinstance(key_facts, list)
+        and key_facts
+    ):
         facts_str = "; ".join(str(f) for f in key_facts if f)
         if facts_str:
             rows.append(f"Key facts: {facts_str}")

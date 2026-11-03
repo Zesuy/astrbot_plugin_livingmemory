@@ -55,7 +55,8 @@ def serialize_source_messages(messages: list[Any]) -> list[dict[str, Any]]:
                 "platform": data.get("platform"),
                 "timestamp": timestamp,
                 "metadata": {
-                    "is_bot_message": bool(metadata.get("is_bot_message", False))
+                    "is_bot_message": bool(metadata.get("is_bot_message", False)),
+                    **{key:metadata[key] for key in ("archive_uid","archive_epoch","time_quality") if key in metadata}
                 },
             }
         )
@@ -67,4 +68,20 @@ def restore_source_messages(source: list[dict[str, Any]]) -> list[Message]:
     return [Message.from_dict(item) for item in source]
 
 
-__all__ = ["restore_source_messages", "serialize_source_messages"]
+def select_memory_sources(messages, metadata, importance, threshold):
+    """Keep event citations independently of the legacy importance threshold."""
+    serialized = serialize_source_messages(messages)
+    if importance >= threshold:
+        return serialized
+    if metadata.get("summary_style") == "events":
+        events = metadata.get("events", [])
+        referenced = {
+            mid for event in events if isinstance(event, dict)
+            and event.get("source_verified") is True
+            for mid in event.get("source_message_ids", []) if type(mid) is int
+        }
+        return [row for row in serialized if row["id"] in referenced] or None
+    return None
+
+
+__all__ = ["restore_source_messages", "serialize_source_messages", "select_memory_sources"]

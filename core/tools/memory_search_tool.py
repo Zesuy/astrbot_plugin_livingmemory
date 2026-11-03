@@ -3,6 +3,7 @@
 from ..memory_scope import adapter_access
 import asyncio
 import json
+import time
 from dataclasses import field
 from typing import Any
 
@@ -37,7 +38,8 @@ class MemorySearchTool(FunctionTool[AstrAgentContext]):
     description: str = (
         "Recall long-term memory when the current context is insufficient. "
         "Use concise, focused recall keywords instead of copying the full user message. "
-        "Call this when the user asks you to recall prior facts, preferences, agreements, or older context, "
+        "Use this for compressed recollections, preferences, relationship impressions, and older context. "
+        "For source-backed names, quotes, times or event sequences, use query_chat_events when available. "
         "or when resolving ambiguous references requires checking memory. "
         "Prefer short topic phrases, named entities, preferences, commitments, or past events as recall keywords. "
         "If the first recall is not enough, refine the keywords and recall again."
@@ -181,6 +183,10 @@ class MemorySearchTool(FunctionTool[AstrAgentContext]):
                             "persona_filtered": use_persona_filtering,
                         },
                         "count": len(serialized_results),
+                        "identity_aliases": [
+                            alias for memory in memories
+                            for alias in (memory.metadata if isinstance(memory.metadata, dict) else {}).get("resolved_account_aliases", [])
+                        ],
                         "results": serialized_results,
                     }
                 )

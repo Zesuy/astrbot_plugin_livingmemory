@@ -21,8 +21,20 @@ from .base import (
     ProviderNotReadyError,
 )
 
-# 管理器
-from .managers import ConversationManager, GraphMemoryManager, MemoryEngine
+# Runtime engines are lazy: storage/model imports must not initialize providers
+# or recurse through ConversationManager while ConversationStore is importing.
+def __getattr__(name):
+    import importlib
+    groups = {
+        "ConversationManager": "managers", "GraphMemoryManager": "managers", "MemoryEngine": "managers",
+        "ChatroomContextParser": "processors", "EntityResolver": "processors", "GraphExtractor": "processors",
+        "MemoryProcessor": "processors", "TextProcessor": "processors", "IndexValidator": "validators",
+    }
+    if name not in groups:
+        raise AttributeError(name)
+    value = getattr(importlib.import_module("."+groups[name],__name__),name)
+    globals()[name] = value
+    return value
 
 # 数据模型
 from .models import (
@@ -35,17 +47,6 @@ from .models import (
     Session,
 )
 
-# 处理器
-from .processors import (
-    ChatroomContextParser,
-    EntityResolver,
-    GraphExtractor,
-    MemoryProcessor,
-    TextProcessor,
-)
-
-# 验证器
-from .validators import IndexValidator
 
 __all__ = [
     # 基础组件

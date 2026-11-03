@@ -109,7 +109,7 @@ async def test_conversation_manager_add_and_get_context(tmp_path: Path):
     assert user_message.sender_name == "Tester"
     assert assistant_message.sender_id == "bot-1"
     assert assistant_message.sender_name == "bot-1"
-    assert assistant_message.metadata == {"is_bot_message": True}
+    assert assistant_message.metadata == {"is_bot_message": True,"archive_epoch":0}
 
     context = await manager.get_context("test:private:s1")
     assert len(context) == 2

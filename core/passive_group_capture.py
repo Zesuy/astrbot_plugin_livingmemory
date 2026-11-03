@@ -121,6 +121,14 @@ class PassiveGroupCaptureFilter(CustomFilter):
         plugin = self._get_plugin()
         if not plugin or getattr(plugin, "_terminating", False) is True:
             return False
+        if not self._passes_global_whitelist(event,cfg) or not is_event_memory_allowed(plugin.config_manager,event):
+            return False
+        runtime = getattr(plugin,"archive_runtime",None)
+        if runtime is not None:
+            try:
+                runtime.submit(event,global_config=cfg)
+            except Exception:
+                logger.warning("档案入口捕获失败",exc_info=True)
         if not plugin.initializer.is_initialized:
             return False
         if not plugin.config_manager.get(

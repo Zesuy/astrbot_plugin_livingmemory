@@ -20,7 +20,7 @@ from ..memory_scope import (
     is_suspicious_session_id,
     resolve_memory_scope,
 )
-from ..memory_source import serialize_source_messages
+from ..memory_source import select_memory_sources
 from ..utils import get_persona_id
 
 _DEFAULT_MEMORY_SCOPE = object()
@@ -898,10 +898,8 @@ class MemoryReflection:
                             0.8,
                         )
                     )
-                    source_messages = (
-                        serialize_source_messages(history_messages)
-                        if importance >= source_threshold
-                        else None
+                    source_messages = select_memory_sources(
+                        history_messages, metadata, importance, source_threshold
                     )
                     (
                         memory_id,

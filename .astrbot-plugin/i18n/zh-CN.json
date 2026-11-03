@@ -546,6 +546,32 @@
         "description": "来源消息上限",
         "hint": "合并后单条记忆最多保留的来源消息条数。"
       }
+    },
+    "archive": {
+      "description": "独立原文档案（仅工具查询）",
+      "enabled": {
+        "description": "启用独立原文档案"
+      },
+      "query_enabled": {
+        "description": "注册 query_chat_events 工具"
+      },
+      "capture_mode": {
+        "description": "收录策略",
+        "labels": [
+          "关闭",
+          "继承群聊捕获设置",
+          "所有获准消息"
+        ]
+      },
+      "result_chars": {
+        "description": "单次结果字符上限"
+      },
+      "max_candidates": {
+        "description": "主题候选上限"
+      },
+      "capture_queue_size": {
+        "description": "捕获队列容量"
+      }
     }
   },
   "pages": {

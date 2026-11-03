@@ -22,7 +22,7 @@ from .memory_scope import (
     resolve_event_identity,
     resolve_memory_scope,
 )
-from .memory_source import serialize_source_messages
+from .memory_source import serialize_source_messages, select_memory_sources
 from .validators.index_validator import IndexValidator
 
 
@@ -669,16 +669,13 @@ class CommandHandler:
                 importance=importance,
                 metadata=metadata,
                 atoms=atoms,
-                source_messages=(
-                    serialize_source_messages(history_messages)
-                    if importance
-                    >= float(
+                source_messages=select_memory_sources(
+                    history_messages, metadata, importance, float(
                         self.config_manager.get(
                             "reflection_engine.source_retention_importance_threshold",
                             0.8,
                         )
                     )
-                    else None
                 ),
             )
 

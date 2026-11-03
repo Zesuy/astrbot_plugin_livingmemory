@@ -44,6 +44,7 @@ from .memory_engine_batch import MemoryEngineBatchMixin
 from .memory_engine_agentic import MemoryEngineAgenticMixin
 from .memory_engine_crud import MemoryEngineCrudMixin
 from .memory_engine_write_ops import MemoryEngineWriteOpsMixin
+from .memory_engine_events import MemoryEngineEventsMixin
 
 
 class MemoryEngine(
@@ -51,6 +52,7 @@ class MemoryEngine(
     MemoryEngineCrudMixin,
     MemoryEngineBatchMixin,
     MemoryEngineAgenticMixin,
+    MemoryEngineEventsMixin,
 ):
     """
     统一记忆引擎

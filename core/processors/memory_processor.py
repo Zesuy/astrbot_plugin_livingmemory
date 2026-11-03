@@ -9,6 +9,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+import json
 
 from astrbot.api import logger
 
@@ -107,6 +108,15 @@ class MemoryProcessor(MemoryProcessorParseMixin, MemoryProcessorBuildMixin):
 
     def _get_chat_prompt(self, is_group_chat: bool) -> str:
         """每次处理时从 PromptManager 实时读取，确保 WebUI 保存后立即生效。"""
+        if self.config.get("summary_mode", "events") == "events":
+            try:
+                from ..prompts.prompt_manager import get_prompt_manager
+                manager = get_prompt_manager()
+                if manager is not None:
+                    return manager.get_prompt("event_summary_prompt")
+            except Exception:
+                pass
+            return (Path(__file__).parent.parent / "prompts" / "event_summary_prompt.txt").read_text(encoding="utf-8")
         try:
             from ..prompts.prompt_manager import get_prompt_manager
 
@@ -158,6 +168,8 @@ class MemoryProcessor(MemoryProcessorParseMixin, MemoryProcessorBuildMixin):
         Returns:
             str: 包含人格提示的 system_prompt
         """
+        if self.config.get("summary_mode", "events") == "events":
+            return "你是客观的群聊事件记录器。只总结给定消息并输出JSON，不扮演Bot，不附加人格和第一人称经历。使用source_refs引用真实输入；计划、玩笑、成员自述与Bot说法必须保留其性质。相对时间必须以消息的发送时间转换，不能以本次请求的运行时刻改写历史事件日期。"
         current_date = datetime.now().strftime("%Y-%m-%d %H:%M")
 
         # 尝试从 PromptManager 获取基础 system prompt
@@ -459,7 +471,12 @@ class MemoryProcessor(MemoryProcessorParseMixin, MemoryProcessorBuildMixin):
             raise ValueError("消息列表不能为空")
 
         # 1. 格式化对话历史
-        conversation_text = self._format_conversation(messages)
+        event_mode = self.config.get("summary_mode", "events") == "events"
+        if event_mode:
+            from ..utils.event_memory import event_source_payload
+            conversation_text = json.dumps(event_source_payload(messages), ensure_ascii=False)
+        else:
+            conversation_text = self._format_conversation(messages)
 
         # 2. 选择合适的提示词模板（每次从 PromptManager 读取，确保 WebUI 保存后立即生效）
         # 使用 replace 而非 format，避免对话内容中的大括号导致解析错误
@@ -495,6 +512,14 @@ class MemoryProcessor(MemoryProcessorParseMixin, MemoryProcessorBuildMixin):
 
             # 4. 解析LLM响应
             structured_data = self._parse_llm_response(llm_response_text, is_group_chat)
+            events = []
+            if event_mode:
+                from ..utils.event_memory import normalize_events, event_line
+                events = normalize_events(structured_data.get("events"), messages)
+                if events:
+                    structured_data["canonical_summary"] = "\n".join(event_line(event) for event in events)
+                    structured_data["summary"] = structured_data["canonical_summary"]
+                    structured_data["key_facts"] = [event_line(event) for event in events]
 
             # 4.5 质量校验
             quality = self._validate_summary_quality(structured_data)
@@ -513,12 +538,25 @@ class MemoryProcessor(MemoryProcessorParseMixin, MemoryProcessorBuildMixin):
             content, metadata = self._build_storage_format(
                 fallback_excerpt, structured_data, is_group_chat
             )
+            if event_mode and events:
+                content = structured_data["canonical_summary"]
+                metadata["persona_summary"] = ""
             metadata["participant_identities"] = self._extract_participant_identities(
                 messages
             )
             content = self._apply_source_time_tags(content, metadata, messages)
             # 将质量标记写入 metadata
             metadata["summary_quality"] = structured_data.get("_quality", "normal")
+            if event_mode:
+                metadata["summary_style"] = "events"
+                metadata["events"] = events
+                metadata["event_schema_version"] = "v1"
+                metadata["event_source_status"] = "verified" if events and all(e["source_verified"] for e in events) else "missing_or_invalid"
+            from ..utils.recall_policy import is_non_substantive
+
+            if is_non_substantive(content, metadata):
+                metadata["recall_excluded"] = True
+                metadata["recall_exclusion_reason"] = "empty_summary"
 
             importance = float(structured_data.get("importance", 0.5))
 

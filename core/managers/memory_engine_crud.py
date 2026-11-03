@@ -28,6 +28,7 @@ from ..retrieval.route_execution import search_route
 from ..utils.json_utils import safe_json_dict
 from ..utils.number_utils import clamp_float, safe_float
 from .agentic_recall_types import AgenticRecallOutcome as AgenticRecallOutcome
+from ...storage.archive_store import source_guarded
 
 
 class MemoryEngineCrudMixin:
@@ -233,10 +234,16 @@ class MemoryEngineCrudMixin:
                 )
             raise
 
+    @source_guarded
     async def save_memory_source(
         self, memory_id: int, source_messages: list[dict[str, Any]]
     ) -> None:
         """Persist source messages outside retrieval metadata and indexes."""
+        guard = getattr(self,"source_access_guard",None)
+        if guard is not None:
+            filtered = await guard.filter_sources(source_messages)
+            if len(filtered) != len(source_messages):
+                raise ValueError("source_epoch_revoked")
         now = time.time()
         async with self._write_transaction() as connection:
             await connection.execute(
@@ -255,6 +262,7 @@ class MemoryEngineCrudMixin:
                 ),
             )
 
+    @source_guarded
     async def get_memory_source(self, memory_id: int) -> list[dict[str, Any]]:
         """Return structured source messages for one memory."""
         if (
@@ -275,8 +283,11 @@ class MemoryEngineCrudMixin:
             value = json.loads(row[0])
         except (json.JSONDecodeError, TypeError):
             return []
-        return value if isinstance(value, list) else []
+        sources = value if isinstance(value,list) else []
+        guard = getattr(self,"source_access_guard",None)
+        return await guard.filter_sources(sources) if guard is not None else sources
 
+    @source_guarded
     async def get_memory_transfer_records(
         self, memory_ids: list[int] | None = None
     ) -> list[dict[str, Any]]:
@@ -351,6 +362,10 @@ class MemoryEngineCrudMixin:
             return records
 
         await asyncio.to_thread(_build_records)
+        guard = getattr(self,"source_access_guard",None)
+        if guard is not None:
+            for record in records:
+                record["source_messages"] = await guard.filter_sources(record["source_messages"])
         return records
 
     async def get_memory_import_keys(self) -> set[tuple[str, str, str]]:
@@ -406,6 +421,8 @@ class MemoryEngineCrudMixin:
         cached_results = self._get_cached_search_results(cache_key)
         if cached_results is not None:
             cached_results = await self._apply_atom_policy(cached_results)
+            cached_results = self._filter_by_retrieval_policy(cached_results)
+            cached_results = await self._attach_account_aliases(query, cached_results, session_id, persona_id)
             await self._update_access_times_internal(
                 [result.doc_id for result in cached_results],
                 [
@@ -502,7 +519,10 @@ class MemoryEngineCrudMixin:
         # 只对合并进来的新候选做原子策略解析，避免重复查询已解析的文档
         results = await self._apply_atom_policy(results, skip_doc_ids=resolved_ids)
 
-        # 访问统计合并到窗口内异步写，不阻塞返回
+        results = self._filter_by_retrieval_policy(results)
+        results = await self._attach_account_aliases(query, results, session_id, persona_id)
+
+        # 访问统计由上游写入缓冲合并。
         if results:
             await self._update_access_times_internal(
                 [r.doc_id for r in results],
@@ -515,6 +535,25 @@ class MemoryEngineCrudMixin:
 
         self._set_cached_search_results(cache_key, results)
         return results
+
+    async def _attach_account_aliases(self, query, results, session_id, persona_id):
+        if not results or not self.config.get("inject_observed_aliases", True):
+            return results
+        resolver = getattr(getattr(self, "graph_store", None), "resolve_account_aliases", None)
+        if not callable(resolver):
+            return results
+        try:
+            aliases = await resolver(query, session_id, persona_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.warning("[MemoryEngine] 读取已观测昵称失败，保留原召回结果", exc_info=True)
+            return results
+        if not isinstance(aliases, list) or not aliases:
+            return results
+        from dataclasses import replace
+
+        return [replace(results[0], metadata={**results[0].metadata, "resolved_account_aliases": aliases}), *results[1:]]
 
     async def _apply_atom_policy(self, results, skip_doc_ids: set[int] | None = None):
         """Resolve atom-backed recall content from current lifecycle state.
@@ -554,6 +593,10 @@ class MemoryEngineCrudMixin:
                     metadata={
                         **result.metadata,
                         "retrieved_atom_ids": [int(row[0]) for row in active],
+                        # Recall-only marker: downstream formatting must not
+                        # restore unfiltered summaries or key facts. Stored
+                        # metadata remains intact for non-recall consumers.
+                        "atom_policy_applied": True,
                     },
                 )
             )

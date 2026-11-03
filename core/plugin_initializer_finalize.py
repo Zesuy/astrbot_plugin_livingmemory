@@ -278,12 +278,15 @@ class InitializerFinalizeMixin:
                 rerank_provider_resolver=resolve_rerank_provider,
             )
             await self.memory_engine.initialize()
+            self.memory_engine.source_access_guard = self.shared_conversation_store
             logger.info("MemoryEngine 已初始化")
 
             # 初始化 ConversationManager
             conversation_db_path = data_dir_path / "conversations.db"
-            conversation_store = ConversationStore(str(conversation_db_path))
-            await conversation_store.initialize()
+            conversation_store = self.shared_conversation_store
+            if conversation_store is None:
+                conversation_store = ConversationStore(str(conversation_db_path))
+                await conversation_store.initialize()
 
             session_config = self.config_manager.session_manager
             self.conversation_manager = ConversationManager(
@@ -311,6 +314,7 @@ class InitializerFinalizeMixin:
                 llm_provider=llm_id if llm_id else None,
                 config={
                     "atom_enabled": memory_engine_config["atom_enabled"],
+                    "summary_mode": self.config_manager.get("reflection_engine.summary_mode", "events"),
                     "include_source_time_tags": self.config_manager.get(
                         "reflection_engine.include_source_time_tags", True
                     ),
@@ -701,7 +705,7 @@ class InitializerFinalizeMixin:
             self.decay_scheduler = None
 
         if self.conversation_manager is not None:
-            if getattr(self.conversation_manager, "store", None) is not None:
+            if getattr(self.conversation_manager, "store", None) is not None and self.conversation_manager.store is not self.shared_conversation_store:
                 try:
                     await self.conversation_manager.store.close()
                 except Exception:

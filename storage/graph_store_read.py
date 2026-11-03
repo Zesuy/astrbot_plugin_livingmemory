@@ -104,7 +104,9 @@ class GraphStoreReadMixin:
         persona_id: str | None = None,
     ) -> list[dict[str, Any]]:
         """Search graph entries through the FTS table."""
-        filters: list[str] = []
+        filters: list[str] = [
+            "COALESCE(json_extract(CASE WHEN json_valid(ge.metadata) THEN ge.metadata ELSE '{}' END, '$.recall_excluded'), 0) != 1"
+        ]
         params: list[Any] = [fts_query]
         if session_id is not None:
             filters.append("ge.session_id = ?")
@@ -243,7 +245,9 @@ class GraphStoreReadMixin:
             return []
 
         placeholders = ",".join("?" * len(node_ids))
-        filters: list[str] = []
+        filters: list[str] = [
+            "COALESCE(json_extract(CASE WHEN json_valid(ge.metadata) THEN ge.metadata ELSE '{}' END, '$.recall_excluded'), 0) != 1"
+        ]
         params: list[Any] = list(node_ids)
 
         if session_id is not None:
@@ -342,6 +346,73 @@ class GraphStoreReadMixin:
             rows = await cursor.fetchall()
 
         return [int(row[0]) for row in rows]
+
+    async def resolve_account_aliases(
+        self, query: str, session_id: str | None, persona_id: str | None
+    ) -> list[dict[str, Any]]:
+        """Return observed names of mentioned accounts, restricted to recall scope.
+
+        A shared nickname returns separate account records, never an identity merge.
+        Legacy global alias lists are not sufficient evidence for a scoped bridge.
+        """
+        from ..core.utils.recall_policy import name_in_query
+        from ..core.memory_scope import adapter_visible, infer_adapter_id
+
+        filters = ["gn.node_type = 'person'", "gn.canonical_value LIKE 'account:%'"]
+        params = []
+        if session_id is not None:
+            filters.append("ge.session_id = ?")
+            params.append(session_id)
+        if persona_id is not None:
+            filters.append("ge.persona_id = ?")
+            params.append(persona_id)
+        ownership, ownership_params = adapter_sql("ge.metadata")
+        filters.append(ownership)
+        params.extend(ownership_params)
+        async with self._read_connect() as db:
+            cursor = await db.execute(
+                "SELECT DISTINCT gn.id, gn.node_key, gn.metadata FROM graph_nodes gn "
+                "JOIN graph_entry_nodes gen ON gen.node_id = gn.id "
+                "JOIN graph_entries ge ON ge.id = gen.entry_id WHERE " + " AND ".join(filters),
+                params,
+            )
+            rows = await cursor.fetchall()
+        resolved = []
+        for node_id, node_key, raw in rows:
+            metadata = safe_json_dict(raw)
+            identity = metadata.get("identity_key")
+            if metadata.get("is_bot") or not identity or node_key != f"person:account:{identity}":
+                continue
+            aliases = []
+            observations = metadata.get("alias_observations", [])
+            for observation in observations if isinstance(observations, list) else []:
+                if not isinstance(observation, dict):
+                    continue
+                if not adapter_visible({"adapter_id": infer_adapter_id(observation)}):
+                    continue
+                if session_id is not None and observation.get("session_id") != session_id:
+                    continue
+                if persona_id is not None and observation.get("persona_id") != persona_id:
+                    continue
+                names = observation.get("aliases", [])
+                for name in names if isinstance(names, list) else []:
+                    if isinstance(name, str) and name.strip() and name.strip() not in aliases:
+                        aliases.append(name.strip())
+            sender_id = str(metadata.get("sender_id") or "")
+            if not any(name_in_query(name, query) for name in [*aliases, sender_id]):
+                continue
+            resolved.append({
+                "node_id": int(node_id),
+                "identity_key": identity, "sender_id": sender_id,
+                "platform": metadata.get("platform"), "aliases": aliases,
+            })
+        # Never silently pick one account when the same name identifies several.
+        for account in resolved:
+            account["ambiguous"] = len(resolved) > 1 and any(
+                name_in_query(name, query) and name in other["aliases"]
+                for name in account["aliases"] for other in resolved if other is not account
+            )
+        return resolved if len(resolved) <= 8 else []
 
     async def get_memory_entry_stats(self) -> dict[str, int]:
         """Return graph storage counts for status reporting."""

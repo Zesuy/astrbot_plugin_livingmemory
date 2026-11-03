@@ -17,6 +17,8 @@ from astrbot.api.provider import LLMResponse, ProviderRequest
 from astrbot.api.star import Context, Star, StarTools
 
 from .core.base.config_manager import ConfigManager
+from .core.archive_runtime import ArchiveRuntime
+from .core.tools.chat_events_tool import ChatEventsTool
 from .core.command_handler import CommandHandler
 from .core.event_handler import EventHandler
 from .core.i18n_backend import init as i18n_init
@@ -126,6 +128,8 @@ class LivingMemoryPlugin(Star):
         self._background_tasks: set[asyncio.Task] = set()
         self._component_init_lock = asyncio.Lock()
         self._llm_tools_registered = False
+        self._archive_tool_registered = False
+        self.archive_runtime = ArchiveRuntime(context,self.config_manager,data_dir)
         self._terminating = False
 
         self.page_api = PluginPageApi(self)
@@ -149,6 +153,9 @@ class LivingMemoryPlugin(Star):
             await self._backup_manager.backup_if_needed_async()
 
             # 执行初始化
+            await self.archive_runtime.initialize()
+            self.initializer.shared_conversation_store = self.archive_runtime.store
+            self._register_archive_tool_if_needed()
             success = await self.initializer.initialize()
 
             if success:
@@ -201,9 +208,31 @@ class LivingMemoryPlugin(Star):
                     initialization_status_callback=self._get_initialization_status_message,
                 )
 
+            if self.archive_runtime.ready:
+                resolver = getattr(getattr(self.initializer.memory_engine,"graph_store",None),"resolve_account_aliases",None)
+                self.archive_runtime.service.alias_resolver = resolver
+            self._register_archive_tool_if_needed()
             self._register_agent_tools_if_needed()
 
         return True
+
+    tool_output_api_version = 1
+
+    async def prepare_tool_output(self, event, *, tool_name, items, delivery_mode):
+        """Optional plugin-to-plugin API. Does not send or modify any message."""
+        return await self.archive_runtime.prepare_tool_output(
+            event, tool_name=tool_name, items=items, delivery_mode=delivery_mode)
+
+    async def record_tool_output(self, event, snapshot):
+        return await self.archive_runtime.record_tool_output(event, snapshot)
+
+    def _register_archive_tool_if_needed(self):
+        runtime = getattr(self,"archive_runtime",None)
+        if (runtime and runtime.ready and runtime.enabled
+                and self.config_manager.get("archive.query_enabled",True)
+                and not self._archive_tool_registered):
+            self.context.add_llm_tools(ChatEventsTool(runtime=runtime))
+            self._archive_tool_registered = True
 
     def _register_agent_tools_if_needed(self) -> None:
         """在核心组件就绪后注册 Agent 工具（回忆/写入）。
@@ -394,6 +423,7 @@ class LivingMemoryPlugin(Star):
     @filter.on_llm_request()
     async def handle_memory_recall(self, event: AstrMessageEvent, req: ProviderRequest):
         """[Event Hook] Query and inject long-term memory before LLM request"""
+        self.archive_runtime.submit(event,triggered=True,global_config=self.context.get_config(umo=event.unified_msg_origin))
         ready, _ = await self._ensure_plugin_ready(wait=False)
         if not ready:
             logger.debug("插件未完成初始化，跳过记忆召回")
@@ -402,6 +432,7 @@ class LivingMemoryPlugin(Star):
         if not self.event_handler:
             return
 
+        self.archive_runtime.accept_work(event)
         await self.event_handler.handle_memory_recall(event, req)
 
     @filter.on_llm_response()
@@ -569,6 +600,8 @@ class LivingMemoryPlugin(Star):
         if get_active_plugin() is self:
             set_active_plugin(None)
 
+        await self.archive_runtime.stop_capture()
+
         # 取消所有后台任务
         if self._background_tasks:
             logger.info(f"正在取消 {len(self._background_tasks)} 个后台任务...")
@@ -589,12 +622,9 @@ class LivingMemoryPlugin(Star):
         await self.initializer.stop_scheduler()
 
         # 关闭 ConversationManager
-        if (
-            self.initializer.conversation_manager
-            and self.initializer.conversation_manager.store
-        ):
-            await self.initializer.conversation_manager.store.close()
-            logger.info("ConversationManager 已关闭")
+        if self.archive_runtime.store.connection:
+            await self.archive_runtime.store.close()
+            logger.info("共享会话/档案存储已关闭")
 
         # 关闭 FaissVecDB 之前，先把索引的未落盘变更写掉
         await self.initializer.shutdown_index_persisters()

@@ -6,6 +6,7 @@ MemoryProcessor 的 MemoryProcessorBuildMixin 拆分模块
 from typing import Any
 from .atom_classifier import classify_atoms
 import json
+import time
 from ..models.memory_atom import MemoryAtom
 
 
@@ -83,6 +84,21 @@ class MemoryProcessorBuildMixin:
         """
         if not self.config.get("atom_enabled", True):
             return []
+        if metadata.get("summary_style") == "events" and metadata.get("events"):
+            from ..models.memory_atom import AtomType, compute_ttl
+            from ..utils.event_memory import event_line
+            atoms = []
+            for event in metadata["events"]:
+                # The speech act has already happened even when its content is a plan.
+                ttl, decay = compute_ttl(AtomType.EPISODIC, parent_importance)
+                atoms.append(MemoryAtom(parent_memory_id=0, atom_type=AtomType.EPISODIC,
+                    content=event_line(event), entities=[p["sender_name"] for p in event["speakers"]],
+                    importance=parent_importance, confidence=.8, event_time=event["observed_start"],
+                    ttl_days=ttl, decay_type=decay, session_id=session_id, persona_id=persona_id,
+                    expires_at=time.time() + ttl * 86400,
+                    metadata={"event_kind":event["kind"],"source_message_ids":event["source_message_ids"]}))
+            metadata["atom_types"] = ["episodic"]
+            return atoms
         key_facts: list[str] = metadata.get("key_facts", [])
         if not key_facts:
             return []

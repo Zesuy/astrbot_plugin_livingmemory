@@ -4,7 +4,7 @@ config_validator.py - 配置验证模块
 """
 
 import re
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -144,6 +144,7 @@ class FusionStrategyConfig(BaseModel):
 
 class ReflectionEngineConfig(BaseModel):
     """反思引擎配置"""
+    summary_mode: Literal["events", "persona"] = Field(default="events", description="客观事件记录或旧版人格回忆")
 
     summary_trigger_rounds: int = Field(
         default=10, ge=1, le=100, description="触发反思的对话轮次"
@@ -178,6 +179,16 @@ class ReflectionEngineConfig(BaseModel):
         le=1.0,
         description="保留原始对话的重要性阈值",
     )
+
+
+class ArchiveConfig(BaseModel):
+    """Optional source archive; no automatic retrieval or injection."""
+    enabled: bool = False
+    query_enabled: bool = True
+    capture_mode: Literal["off","inherit","permitted_all"] = "inherit"
+    result_chars: int = Field(default=24000,ge=2000,le=100000)
+    max_candidates: int = Field(default=400,ge=20,le=2000)
+    capture_queue_size: int = Field(default=512,ge=16,le=10000)
 
 
 class AgentToolsConfig(BaseModel):
@@ -454,6 +465,7 @@ class LivingMemoryConfig(BaseModel):
         default_factory=ReflectionEngineConfig
     )
     agent_tools: AgentToolsConfig = Field(default_factory=AgentToolsConfig)
+    archive: ArchiveConfig = Field(default_factory=ArchiveConfig)
     forgetting_agent: ForgettingAgentConfig = Field(
         default_factory=ForgettingAgentConfig
     )

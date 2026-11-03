@@ -104,7 +104,7 @@ class TestPromptLiveReload:
             get_prompt_manager().update_prompt("private_chat_prompt", custom_text)
 
             llm = _DummyLLMProvider("{}")
-            processor = MemoryProcessor(llm_provider=llm, context=None)
+            processor = MemoryProcessor(llm_provider=llm, context=None, config={"summary_mode": "persona"})
 
             live = processor._get_chat_prompt(is_group_chat=False)
             assert live == custom_text
@@ -137,7 +137,7 @@ async def test_persona_prompt_is_included_when_available():
         return_value=SimpleNamespace(system_prompt="你是活泼助手")
     )
 
-    processor = MemoryProcessor(llm_provider=llm, context=context)
+    processor = MemoryProcessor(llm_provider=llm, context=context, config={"summary_mode": "persona"})
 
     system_prompt = await processor._build_system_prompt_with_persona("persona_1")
     assert "人格设定" in system_prompt

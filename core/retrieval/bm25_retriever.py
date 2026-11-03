@@ -209,7 +209,8 @@ class BM25Retriever:
         # Apply scope and status before LIMIT so other sessions cannot crowd out hits.
         metadata_sql = "CASE WHEN json_valid(d.metadata) THEN d.metadata ELSE '{}' END"
         filters = [
-            f"COALESCE(json_extract({metadata_sql}, '$.status'), 'active') = 'active'"
+            f"COALESCE(json_extract({metadata_sql}, '$.status'), 'active') = 'active'",
+            f"COALESCE(json_extract({metadata_sql}, '$.recall_excluded'), 0) != 1",
         ]
         params = [fts_query]
         adapter_filter, adapter_params = adapter_sql(metadata_sql)

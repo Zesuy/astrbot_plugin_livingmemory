@@ -205,6 +205,13 @@ EXPECTED_OPTION_LABELS = {
 }
 
 
+# Archive options are an extension to the upstream schema.
+EXPECTED_OPTION_LABELS['en-US']["archive.capture_mode"] = {'off': 'Off', 'inherit': 'Inherit group capture', 'permitted_all': 'All permitted messages'}
+EXPECTED_OPTION_LABELS['zh-CN']["archive.capture_mode"] = {'off': '关闭', 'inherit': '继承群聊捕获设置', 'permitted_all': '所有获准消息'}
+EXPECTED_OPTION_LABELS['ja-JP']["archive.capture_mode"] = {'off': '無効', 'inherit': 'グループ収録設定を継承', 'permitted_all': '許可された全メッセージ'}
+EXPECTED_OPTION_LABELS['ru-RU']["archive.capture_mode"] = {'off': 'Выключено', 'inherit': 'Наследовать захват группы', 'permitted_all': 'Все разрешённые сообщения'}
+
+
 def _load_json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 

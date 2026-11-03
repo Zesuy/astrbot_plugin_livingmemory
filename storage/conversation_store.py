@@ -7,6 +7,8 @@ import asyncio
 import json
 import time
 from pathlib import Path
+from contextlib import asynccontextmanager
+from .archive_store import ArchiveStoreMixin
 
 import aiosqlite
 
@@ -15,7 +17,7 @@ from astrbot.api import logger
 from ..core.models.conversation_models import Session, serialize_to_json
 from .conversation_store_messages import ConversationStoreMessagesMixin
 
-class ConversationStore(ConversationStoreMessagesMixin):
+class ConversationStore(ArchiveStoreMixin, ConversationStoreMessagesMixin):
     """
     会话存储管理器
 
@@ -34,6 +36,7 @@ class ConversationStore(ConversationStoreMessagesMixin):
         """
         self.db_path = db_path
         self.connection: aiosqlite.Connection | None = None
+        self.read_connection: aiosqlite.Connection | None = None
         self._write_lock = asyncio.Lock()
 
         # 确保数据库目录存在
@@ -49,15 +52,63 @@ class ConversationStore(ConversationStoreMessagesMixin):
 
         await self._create_tables()
         await self._create_indexes()
+        await self.initialize_archive()
+        self.read_connection = await aiosqlite.connect(Path(self.db_path).resolve().as_uri()+"?mode=ro",uri=True)
+        self.read_connection.row_factory = aiosqlite.Row
 
         logger.info(f"[ConversationStore] 数据库初始化完成: {self.db_path}")
 
+
+    @asynccontextmanager
+    async def transaction(self):
+        """One writer; shield commit/rollback completion before releasing the lock."""
+        async with self._write_lock:
+            if self.connection is None:
+                raise RuntimeError("store_not_ready")
+            committed = False
+            try:
+                await self.connection.execute("BEGIN IMMEDIATE")
+                yield self.connection
+                task = asyncio.create_task(self.connection.commit())
+                try:
+                    await asyncio.shield(task)
+                except asyncio.CancelledError:
+                    await task
+                    committed = True
+                    raise
+                committed = True
+            except BaseException:
+                if committed:
+                    raise
+                task = asyncio.create_task(self.connection.rollback())
+                try:
+                    await asyncio.shield(task)
+                except asyncio.CancelledError:
+                    await task
+                raise
+
+    async def set_session_metadata(self, session_id, key=None, value=None, reset=False):
+        async with self.transaction():
+            rows = await self.connection.execute_fetchall("SELECT metadata FROM sessions WHERE session_id=?",(session_id,))
+            if not rows:
+                return
+            meta = {} if reset else json.loads(rows[0][0] or "{}")
+            if not isinstance(meta,dict):
+                meta = {}
+            if not reset:
+                meta[key] = value
+            await self.connection.execute("UPDATE sessions SET metadata=? WHERE session_id=?",(json.dumps(meta,ensure_ascii=False),session_id))
+
     async def close(self) -> None:
         """关闭数据库连接"""
+        if self.read_connection:
+            await self.read_connection.close()
+            self.read_connection = None
         if self.connection:
             await self.connection.close()
             self.connection = None
             logger.info("[ConversationStore] 数据库连接已关闭")
+
 
     async def _create_tables(self) -> None:
         """创建数据库表结构"""
@@ -95,6 +146,7 @@ class ConversationStore(ConversationStoreMessagesMixin):
 
             await self.connection.commit()
 
+
     async def _create_indexes(self) -> None:
         """创建索引以优化查询性能"""
         if self.connection is not None:
@@ -122,6 +174,7 @@ class ConversationStore(ConversationStoreMessagesMixin):
 
             await self.connection.commit()
 
+
     # ==================== 会话管理 ====================
 
     async def create_session(self, session_id: str, platform: str) -> Session:
@@ -147,7 +200,7 @@ class ConversationStore(ConversationStoreMessagesMixin):
 
         if self.connection is None:
             raise RuntimeError("数据库连接未初始化")
-        async with self._write_lock:
+        async with self.transaction():
             await self.connection.execute(
                 """
                 INSERT INTO sessions (session_id, platform, created_at, last_active_at, message_count, participants, metadata)
@@ -156,7 +209,7 @@ class ConversationStore(ConversationStoreMessagesMixin):
             """,
                 (session_id, platform, now, now, 0, "[]", "{}"),
             )
-            await self.connection.commit()
+            pass  # commit belongs to transaction owner
 
         session = await self.get_session(session_id)
         if session is not None:
@@ -177,6 +230,7 @@ class ConversationStore(ConversationStoreMessagesMixin):
         logger.debug(f"[ConversationStore] 创建会话: {session_id}")
         return session
 
+
     async def get_session(self, session_id: str) -> Session | None:
         """
         获取会话信息
@@ -187,9 +241,9 @@ class ConversationStore(ConversationStoreMessagesMixin):
         Returns:
             Optional[Session]: 会话对象,不存在则返回 None
         """
-        if self.connection is None:
+        if self.read_connection is None:
             return None
-        async with self.connection.execute(
+        async with self.read_connection.execute(
             """
             SELECT id, session_id, platform, created_at, last_active_at,
                    message_count, participants, metadata
@@ -216,6 +270,7 @@ class ConversationStore(ConversationStoreMessagesMixin):
             }
         )
 
+
     async def update_session_activity(self, session_id: str) -> None:
         """
         更新会话最后活跃时间
@@ -227,7 +282,7 @@ class ConversationStore(ConversationStoreMessagesMixin):
 
         if self.connection is None:
             return
-        async with self._write_lock:
+        async with self.transaction():
             await self.connection.execute(
                 """
                 UPDATE sessions
@@ -236,7 +291,8 @@ class ConversationStore(ConversationStoreMessagesMixin):
             """,
                 (now, session_id),
             )
-            await self.connection.commit()
+            pass  # commit belongs to transaction owner
+
 
     async def get_recent_sessions(self, limit: int = 10) -> list[Session]:
         """
@@ -248,9 +304,9 @@ class ConversationStore(ConversationStoreMessagesMixin):
         Returns:
             List[Session]: 会话列表
         """
-        if self.connection is None:
+        if self.read_connection is None:
             return []
-        async with self.connection.execute(
+        async with self.read_connection.execute(
             """
             SELECT id, session_id, platform, created_at, last_active_at,
                    message_count, participants, metadata
@@ -281,6 +337,7 @@ class ConversationStore(ConversationStoreMessagesMixin):
 
         return sessions
 
+
     async def delete_old_sessions(
         self, days: int = 30, ttl_seconds: int | None = None
     ) -> list[str]:
@@ -303,7 +360,7 @@ class ConversationStore(ConversationStoreMessagesMixin):
 
         if self.connection is None:
             return []
-        async with self._write_lock:
+        async with self.transaction():
             # 获取要删除的会话ID列表
             async with self.connection.execute(
                 """
@@ -331,13 +388,73 @@ class ConversationStore(ConversationStoreMessagesMixin):
                 session_ids,
             )
 
-            await self.connection.commit()
+            pass  # commit belongs to transaction owner
 
         logger.info(
             f"[ConversationStore] 删除了 {len(session_ids)} 个过期会话 "
             f"(超过 {effective_ttl_seconds} 秒)"
         )
         return session_ids
+
+    async def get_session_participants(self, session_id: str) -> list[str]:
+        """
+        获取会话参与者列表 (群聊场景)
+
+        Args:
+            session_id: 会话ID
+
+        Returns:
+            List[str]: 参与者ID列表
+        """
+        session = await self.get_session(session_id)
+        if session:
+            return session.participants
+        return []
+
+
+    async def add_session_participant(self, session_id: str, sender_id: str) -> None:
+        """
+        添加会话参与者 (避免重复)
+
+        Args:
+            session_id: 会话ID
+            sender_id: 发送者ID
+        """
+        if self.connection is None:
+            return
+
+        async with self.transaction():
+            async with self.connection.execute(
+                "SELECT participants FROM sessions WHERE session_id = ?",
+                (session_id,),
+            ) as cursor:
+                row = await cursor.fetchone()
+
+            if not row:
+                return
+
+            try:
+                participants = json.loads(row["participants"] or "[]")
+            except (json.JSONDecodeError, TypeError):
+                participants = []
+            if not isinstance(participants, list):
+                participants = []
+
+            if sender_id in participants:
+                return
+
+            participants.append(sender_id)
+            await self.connection.execute(
+                """
+                UPDATE sessions
+                SET participants = ?
+                WHERE session_id = ?
+            """,
+                (serialize_to_json(participants), session_id),
+            )
+
+            pass  # commit belongs to transaction owner
+
 
     # ==================== 消息管理 ====================
 

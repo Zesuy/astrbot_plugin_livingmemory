@@ -185,6 +185,24 @@ class ConversationManager:
         if isinstance(checkpoint_id, str) and checkpoint_id:
             metadata["llm_checkpoint_id"] = checkpoint_id
 
+        ledger_available = isinstance(getattr(self.store,"archive_epochs",None),dict)
+        accepted = event.get_extra("_lm_work_epoch",None) if hasattr(event,"get_extra") else None
+        if not isinstance(accepted,int):
+            captured = event.get_extra("_lm_archive_record",None) if hasattr(event,"get_extra") else None
+            accepted = captured.epoch if hasattr(captured,"epoch") and isinstance(captured.epoch,int) else self.store.accepted_epoch(session_id) if ledger_available else 0
+            if role=="assistant" and accepted>0 and not hasattr(captured,"epoch"):
+                # Without pinned input lineage, a delayed generated reply cannot
+                # be reclassified into the post-clear source generation.
+                accepted = -1
+            if hasattr(event,"set_extra"):
+                event.set_extra("_lm_work_epoch",accepted)
+        archive_metadata = {"archive_epoch":accepted}
+        authorizer = getattr(self.store,"capture_authorizer",None)
+        allowed = await authorizer(event) if callable(authorizer) else bool(getattr(self.store,"archive_enabled",False))
+        if role == "user" and getattr(self.store,"archive_enabled",False) and allowed:
+            from ..models.archive_models import capture_event
+            record = capture_event(event,accepted)
+            archive_metadata = record.metadata()
         return await self.add_message(
             session_id=session_id,
             role=role,
@@ -194,7 +212,7 @@ class ConversationManager:
             group_id=group_id,
             platform=platform,
             is_bot_message=(role == "assistant"),
-            metadata=metadata,
+            metadata={**metadata, **archive_metadata},
             timestamp=self._resolve_event_timestamp(event),
         )
 
@@ -275,7 +293,8 @@ class ConversationManager:
             group_id=group_id,
             platform=platform,
             timestamp=message_timestamp,
-            metadata=dict(metadata or {}),
+            metadata={"archive_epoch":self.store.accepted_epoch(session_id) if isinstance(getattr(self.store,"archive_epochs",None),dict) else 0,
+                      **(metadata or {}), **({"is_bot_message":True} if is_bot_message else {})},
         )
         if is_bot_message:
             message.metadata["is_bot_message"] = True

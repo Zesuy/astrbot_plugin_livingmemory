@@ -95,6 +95,10 @@ class MemoryEngineWriteOpsMixin:
                 metadata = {}
             if str(metadata.get("status") or "active") != "active":
                 continue
+            from ..utils.recall_policy import is_non_substantive
+
+            if is_non_substantive(result.content, metadata):
+                continue
             if (
                 importance_threshold > 0
                 and clamp_float(metadata.get("importance"), default=0.5)
@@ -136,7 +140,8 @@ class MemoryEngineWriteOpsMixin:
             return []
 
         conditions = [
-            "COALESCE(json_extract(metadata, '$.status'), 'active') = 'active'"
+            "COALESCE(json_extract(metadata, '$.status'), 'active') = 'active'",
+            "COALESCE(json_extract(metadata, '$.recall_excluded'), 0) != 1",
         ]
         params: list[Any] = []
         if session_id is not None:

@@ -67,6 +67,14 @@ class GraphKeywordRetriever:
             limit=max(limit * 3, 12),
         )
         matched_node_ids = [item["id"] for item in matched_nodes]
+        resolver = getattr(self.graph_store, "resolve_account_aliases", None)
+        if self.config.get("use_observed_aliases", True) and callable(resolver):
+            account_matches = await resolver(query, session_id, persona_id)
+            if isinstance(account_matches, list):
+                matched_node_ids = list(dict.fromkeys([
+                    *matched_node_ids,
+                    *(item["node_id"] for item in account_matches if isinstance(item, dict) and "node_id" in item),
+                ]))
         expansion_hits = await self.graph_store.get_entries_for_node_ids(
             node_ids=matched_node_ids,
             limit=max(self.expansion_limit, limit * 3),

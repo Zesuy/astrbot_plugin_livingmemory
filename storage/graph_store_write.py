@@ -123,6 +123,20 @@ class GraphStoreWriteMixin:
         node: GraphNode,
         now: str,
     ) -> int:
+        metadata = node.metadata
+        identity = metadata.get("identity_key") if isinstance(metadata, dict) else None
+        if node.node_type == "person" and identity and node.canonical_value == f"account:{identity}":
+            # Lock before reading so concurrent windows cannot lose each other's names.
+            if not db.in_transaction:
+                await db.execute("BEGIN IMMEDIATE")
+            cursor = await db.execute(
+                "SELECT metadata FROM graph_nodes WHERE node_key = ?", (node.node_key,)
+            )
+            row = await cursor.fetchone()
+            from ..core.utils.json_utils import safe_json_dict
+            from ..core.utils.recall_policy import merge_account_metadata
+
+            metadata = merge_account_metadata(safe_json_dict(row[0]) if row else {}, metadata, node.value)
         cursor = await db.execute(
             """
             INSERT INTO graph_nodes(
@@ -139,7 +153,7 @@ class GraphStoreWriteMixin:
                 node.node_type,
                 node.value,
                 node.canonical_value,
-                self._to_json(node.metadata),
+                self._to_json(metadata),
                 now,
                 now,
             ),
@@ -477,6 +491,21 @@ class GraphStoreWriteMixin:
             await db.execute("ATTACH DATABASE ? AS shadow_graph", (shadow_db_path,))
             try:
                 await db.execute("BEGIN IMMEDIATE")
+                # An index rebuild must not erase independently observed old names.
+                from ..core.utils.json_utils import safe_json_dict
+                from ..core.utils.recall_policy import merge_account_metadata
+
+                cursor = await db.execute(
+                    "SELECT old.node_key, old.metadata, fresh.metadata, fresh.node_value "
+                    "FROM graph_nodes old JOIN shadow_graph.graph_nodes fresh ON fresh.node_key = old.node_key "
+                    "WHERE old.node_type = 'person' AND old.canonical_value LIKE 'account:%'"
+                )
+                alias_updates = []
+                for key, previous, incoming, value in await cursor.fetchall():
+                    previous, incoming = safe_json_dict(previous), safe_json_dict(incoming)
+                    identity = incoming.get("identity_key")
+                    if identity and key == f"person:account:{identity}" and previous.get("identity_key") == identity:
+                        alias_updates.append((self._to_json(merge_account_metadata(previous, incoming, value)), key))
                 await db.execute("DELETE FROM livingmemory_graph_entries_fts")
                 await db.execute("DELETE FROM graph_entry_nodes")
                 await db.execute("DELETE FROM graph_entries")
@@ -494,6 +523,8 @@ class GraphStoreWriteMixin:
                     FROM shadow_graph.graph_nodes
                     """
                 )
+                if alias_updates:
+                    await db.executemany("UPDATE graph_nodes SET metadata = ? WHERE node_key = ?", alias_updates)
                 await db.execute(
                     """
                     INSERT INTO graph_edges(

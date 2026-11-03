@@ -511,7 +511,7 @@ async def test_system_prompt_with_persona_keeps_current_date_out_of_fixed_prefix
     context.persona_manager.get_persona = AsyncMock(
         return_value=SimpleNamespace(system_prompt="你是一个专业助手")
     )
-    processor = MemoryProcessor(llm_provider=llm, context=context)
+    processor = MemoryProcessor(llm_provider=llm, context=context, config={"summary_mode": "persona"})
 
     system_prompt = await processor._build_system_prompt_with_persona("persona_1")
 

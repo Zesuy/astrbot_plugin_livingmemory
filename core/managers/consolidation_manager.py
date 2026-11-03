@@ -102,9 +102,12 @@ class MemoryConsolidationManager:
         max_importance = float(cfg.get("max_importance", 0.5))
         cutoff = time.time() - int(cfg.get("min_age_days", 7)) * 86400.0
         try:
-            return await self.memory_engine.get_consolidation_candidates(
+            candidates = await self.memory_engine.get_consolidation_candidates(
                 max_importance, cutoff
             )
+            # The legacy merge protocol cannot preserve event citations/times.
+            return [memory for memory in candidates
+                    if memory.get("metadata", {}).get("summary_style") != "events"]
         except Exception as e:
             logger.error(f"[记忆整合] 查询候选记忆失败: {e}", exc_info=True)
             return []

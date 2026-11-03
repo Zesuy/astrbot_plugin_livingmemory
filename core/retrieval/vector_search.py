@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 from ..faiss_async_persist import get_async_persister
 from ..memory_scope import adapter_sql, adapter_visible, current_adapter_access
+from ..utils.recall_policy import is_non_substantive
 
 query_embeddings = ContextVar("livingmemory_query_embeddings", default=None)
 
@@ -168,6 +169,8 @@ async def retrieve_vectors(db, query, k, filters, *, source_key="id"):
             if str(metadata.get("status") or "active") != "active":
                 continue
             if not adapter_visible(metadata):
+                continue
+            if is_non_substantive(hit.data.get("text"), metadata):
                 continue
             if any(metadata.get(key) != value for key, value in filters.items()):
                 continue

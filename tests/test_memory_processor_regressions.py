@@ -20,7 +20,7 @@ def processor(monkeypatch, tmp_path):
     provider = SimpleNamespace(
         text_chat=AsyncMock(return_value=SimpleNamespace(completion_text='{"summary":"测试"}'))
     )
-    return MemoryProcessor(llm_provider=provider)
+    return MemoryProcessor(llm_provider=provider, config={"summary_mode": "persona"})
 
 
 @pytest.mark.parametrize("fenced", [False, True])

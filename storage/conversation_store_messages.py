@@ -9,6 +9,7 @@ from typing import Any
 
 from astrbot.api import logger
 from ..core.models.conversation_models import Message, serialize_to_json
+from ..core.models.archive_models import ArchiveMessage
 
 
 class ConversationStoreMessagesMixin:
@@ -37,7 +38,21 @@ class ConversationStoreMessagesMixin:
         sender_id = message.sender_id or message.session_id
         content = Message.content_to_text(message.content)
         now = time.time()
-        async with self._write_lock:
+        async with self.transaction():
+            if message.metadata.get("archive_epoch",0) != self.accepted_epoch(message.session_id):
+                raise ValueError("source_epoch_revoked")
+            archive_record = (message.metadata or {}).get("archive_record")
+            archive_uid = None
+            if not isinstance(archive_record,dict) and message.metadata.get("archive_uid"):
+                existing = await self.connection.execute_fetchall("SELECT working_id,projected FROM archive_messages WHERE uid=? AND conversation=?",(message.metadata["archive_uid"],message.session_id))
+                if existing and existing[0][1]:
+                    return existing[0][0] or 0
+            if self.archive_enabled and isinstance(archive_record,dict):
+                archive_uid, previous_id, projected = await self._archive_insert(ArchiveMessage(**archive_record))
+                message.metadata.update({"archive_uid":archive_uid,"archive_epoch":archive_record["epoch"]})
+                message.metadata.pop("archive_record",None)
+                if projected:
+                    return previous_id or 0
             await self.connection.execute(
                 """
                 INSERT INTO sessions (
@@ -72,6 +87,8 @@ class ConversationStoreMessagesMixin:
             )
 
             message_id = cursor.lastrowid if cursor.lastrowid else 0
+            if archive_uid:
+                await self.connection.execute("UPDATE archive_messages SET working_id=?,projected=1 WHERE uid=?",(message_id,archive_uid))
 
             await self.connection.execute(
                 """
@@ -101,12 +118,13 @@ class ConversationStoreMessagesMixin:
                     message.session_id,
                 ),
             )
-            await self.connection.commit()
+            pass  # commit belongs to transaction owner
 
         logger.debug(
             f"[ConversationStore] 添加消息: session={message.session_id}, role={message.role}"
         )
         return message_id
+
 
     async def get_messages(
         self, session_id: str, limit: int = 50, sender_id: str | None = None
@@ -145,9 +163,9 @@ class ConversationStoreMessagesMixin:
             """
             params = (session_id, limit)
 
-        if self.connection is None:
+        if self.read_connection is None:
             return []
-        async with self.connection.execute(query, params) as cursor:
+        async with self.read_connection.execute(query, params) as cursor:
             rows = await cursor.fetchall()
 
         messages = []
@@ -173,6 +191,7 @@ class ConversationStoreMessagesMixin:
         messages.reverse()
         return messages
 
+
     async def get_message_count(self, session_id: str) -> int:
         """
         获取会话的消息总数
@@ -183,9 +202,9 @@ class ConversationStoreMessagesMixin:
         Returns:
             int: 消息数量
         """
-        if self.connection is None:
+        if self.read_connection is None:
             return 0
-        async with self.connection.execute(
+        async with self.read_connection.execute(
             """
             SELECT COUNT(*) as count
             FROM messages
@@ -203,7 +222,7 @@ class ConversationStoreMessagesMixin:
         self, session_id: str, timestamp: float, message_id: int
     ) -> None:
         """Commit a completed snapshot by its stable last-message position."""
-        async with self._write_lock:
+        async with self.transaction():
             row = await (
                 await self.connection.execute(
                     "SELECT s.metadata, COUNT(CASE WHEN m.timestamp < ? OR (m.timestamp = ? AND m.id <= ?) THEN m.id END) "
@@ -217,15 +236,10 @@ class ConversationStoreMessagesMixin:
                 int(metadata.get("last_summarized_index", 0) or 0), int(row[1])
             )
             metadata["pending_summary"] = None
-            try:
-                await self.connection.execute(
-                    "UPDATE sessions SET metadata = ? WHERE session_id = ?",
-                    (json.dumps(metadata, ensure_ascii=False), session_id),
-                )
-                await self.connection.commit()
-            except BaseException:
-                await self.connection.rollback()
-                raise
+            await self.connection.execute(
+                "UPDATE sessions SET metadata = ? WHERE session_id = ?",
+                (json.dumps(metadata, ensure_ascii=False), session_id),
+            )
 
     async def trim_session_messages(
         self,
@@ -240,7 +254,7 @@ class ConversationStoreMessagesMixin:
 
         # 整个读-改-写都在写锁内完成，避免与 add_message 交错导致
         # message_count / last_summarized_index 漂移（TOCTOU）。
-        async with self._write_lock:
+        async with self.transaction():
             async with self.connection.execute(
                 """
                 SELECT
@@ -290,7 +304,7 @@ class ConversationStoreMessagesMixin:
                         session_id,
                     ),
                 )
-                await self.connection.commit()
+                pass  # commit belongs to transaction owner
                 logger.warning(
                     f"[ConversationStore] 阻止清理未总结消息并重置 last_summarized_index: "
                     f"{session_id} ({last_summarized_index} > {actual_count})"
@@ -354,8 +368,9 @@ class ConversationStoreMessagesMixin:
                     session_id,
                 ),
             )
-            await self.connection.commit()
+            pass  # commit belongs to transaction owner
         return deleted_count
+
 
     async def delete_session_messages(self, session_id: str) -> int:
         """
@@ -369,7 +384,7 @@ class ConversationStoreMessagesMixin:
         """
         if self.connection is None:
             return 0
-        async with self._write_lock:
+        async with self.transaction():
             cursor = await self.connection.execute(
                 """
                 DELETE FROM messages
@@ -388,7 +403,7 @@ class ConversationStoreMessagesMixin:
             """,
                 (session_id,),
             )
-            await self.connection.commit()
+            pass  # commit belongs to transaction owner
 
         logger.info(
             f"[ConversationStore] 删除会话消息: session={session_id}, count={deleted_count}"
@@ -411,7 +426,7 @@ class ConversationStoreMessagesMixin:
         Returns:
             List[Message]: 消息列表（升序）
         """
-        if self.connection is None:
+        if self.read_connection is None:
             return []
 
         query = """
@@ -426,7 +441,7 @@ class ConversationStoreMessagesMixin:
             query += " LIMIT ?"
             params = (session_id, limit)
 
-        async with self.connection.execute(query, params) as cursor:
+        async with self.read_connection.execute(query, params) as cursor:
             rows = await cursor.fetchall()
 
         messages = []
@@ -463,7 +478,7 @@ class ConversationStoreMessagesMixin:
         Returns:
             List[dict]: [{"id", "role", "metadata"}]（metadata 已解析为 dict）
         """
-        if self.connection is None:
+        if self.read_connection is None:
             return []
 
         query = """
@@ -473,7 +488,7 @@ class ConversationStoreMessagesMixin:
             ORDER BY timestamp ASC, id ASC
         """
         refs: list[dict[str, Any]] = []
-        async with self.connection.execute(query, (session_id,)) as cursor:
+        async with self.read_connection.execute(query, (session_id,)) as cursor:
             rows = await cursor.fetchall()
         for row in rows:
             metadata = row["metadata"] or "{}"
@@ -499,10 +514,10 @@ class ConversationStoreMessagesMixin:
         Returns:
             Message 或 None
         """
-        if self.connection is None:
+        if self.read_connection is None:
             return None
 
-        async with self.connection.execute(
+        async with self.read_connection.execute(
             """
             SELECT id, session_id, role, content, sender_id, sender_name,
                    group_id, platform, timestamp, metadata
@@ -613,8 +628,8 @@ class ConversationStoreMessagesMixin:
         """
         if self.connection is None:
             return {}
-        async with self._write_lock:
-            kept_count = await self.get_message_count(session_id)
+        async with self.transaction():
+            kept_count = (await self.connection.execute_fetchall("SELECT COUNT(*) FROM messages WHERE session_id=?", (session_id,)))[0][0]
             repaired = self._clamp_summary_metadata(metadata, kept_count)
             await self.connection.execute(
                 """
@@ -624,7 +639,7 @@ class ConversationStoreMessagesMixin:
                 """,
                 (json.dumps(metadata, ensure_ascii=False), session_id),
             )
-            await self.connection.commit()
+            pass  # transaction owner commits
         return repaired
 
     async def delete_messages_from_position(
@@ -656,7 +671,7 @@ class ConversationStoreMessagesMixin:
         if not ids and position < 0:
             return 0
 
-        async with self._write_lock:
+        async with self.transaction():
             if ids:
                 # 精确按 id 删除：并发新增的消息不受影响
                 placeholders = ",".join("?" for _ in ids)
@@ -670,7 +685,7 @@ class ConversationStoreMessagesMixin:
                 deleted_count = max(0, cursor.rowcount)
                 if deleted_count <= 0:
                     return 0
-                kept_count = await self.get_message_count(session_id)
+                kept_count = (await self.connection.execute_fetchall("SELECT COUNT(*) FROM messages WHERE session_id=?", (session_id,)))[0][0]
             else:
                 # 定位起始消息（按会话顺序），position == 0 表示从第一条删除
                 async with self.connection.execute(
@@ -715,7 +730,7 @@ class ConversationStoreMessagesMixin:
                 session_row = await cursor.fetchone()
 
             if not session_row:
-                await self.connection.commit()
+                pass  # transaction owner commits
                 return deleted_count
 
             try:
@@ -741,7 +756,7 @@ class ConversationStoreMessagesMixin:
                     session_id,
                 ),
             )
-            await self.connection.commit()
+            pass  # transaction owner commits
 
             logger.info(
                 f"[ConversationStore] 删除会话消息（对账回滚）: session={session_id}, "
@@ -759,9 +774,9 @@ class ConversationStoreMessagesMixin:
         Returns:
             Dict[str, int]: {sender_id: message_count}
         """
-        if self.connection is None:
+        if self.read_connection is None:
             return {}
-        async with self.connection.execute(
+        async with self.read_connection.execute(
             """
             SELECT sender_id, COUNT(*) as count
             FROM messages
@@ -777,6 +792,7 @@ class ConversationStoreMessagesMixin:
             stats[row["sender_id"]] = row["count"]
 
         return stats
+
 
     async def update_message_metadata(self, message_id: int, metadata: dict) -> bool:
         """
@@ -795,7 +811,7 @@ class ConversationStoreMessagesMixin:
         try:
             import json
 
-            async with self._write_lock:
+            async with self.transaction():
                 await self.connection.execute(
                     """
                     UPDATE messages
@@ -804,12 +820,13 @@ class ConversationStoreMessagesMixin:
                     """,
                     (json.dumps(metadata, ensure_ascii=False), message_id),
                 )
-                await self.connection.commit()
+                pass  # commit belongs to transaction owner
             logger.debug(f"[ConversationStore] 更新消息metadata: id={message_id}")
             return True
         except Exception as e:
             logger.error(f"更新消息metadata失败: {e}", exc_info=True)
             return False
+
 
     async def search_messages(
         self, session_id: str, keyword: str, limit: int = 20
@@ -825,9 +842,9 @@ class ConversationStoreMessagesMixin:
         Returns:
             List[Message]: 匹配的消息列表
         """
-        if self.connection is None:
+        if self.read_connection is None:
             return []
-        async with self.connection.execute(
+        async with self.read_connection.execute(
             """
             SELECT id, session_id, role, content, sender_id, sender_name,
                    group_id, platform, timestamp, metadata
@@ -861,6 +878,7 @@ class ConversationStoreMessagesMixin:
 
         return messages
 
+
     async def get_messages_range(
         self, session_id: str, offset: int = 0, limit: int = 50
     ) -> list[Message]:
@@ -875,7 +893,7 @@ class ConversationStoreMessagesMixin:
         Returns:
             List[Message]: 消息列表（按时间升序）
         """
-        if self.connection is None:
+        if self.read_connection is None:
             return []
 
         # 使用子查询确保按时间升序后再应用 OFFSET/LIMIT
@@ -888,7 +906,7 @@ class ConversationStoreMessagesMixin:
             LIMIT ? OFFSET ?
         """
 
-        async with self.connection.execute(
+        async with self.read_connection.execute(
             query, (session_id, limit, offset)
         ) as cursor:
             rows = await cursor.fetchall()
@@ -919,6 +937,7 @@ class ConversationStoreMessagesMixin:
 
         return messages
 
+
     async def sync_message_counts(self) -> dict[str, int]:
         """
         同步所有会话的 message_count 与实际消息数量
@@ -934,7 +953,7 @@ class ConversationStoreMessagesMixin:
         fixed_sessions = {}
 
         try:
-            async with self._write_lock:
+            async with self.transaction():
                 async with self.connection.execute(
                     """
                     SELECT s.session_id,
@@ -967,7 +986,7 @@ class ConversationStoreMessagesMixin:
                     )
 
                 if fixed_sessions:
-                    await self.connection.commit()
+                    pass  # commit belongs to transaction owner
                     logger.info(
                         f"[ConversationStore] 共修复 {len(fixed_sessions)} 个会话的 message_count"
                     )

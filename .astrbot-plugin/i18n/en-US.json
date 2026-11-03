@@ -546,6 +546,32 @@
         "description": "Source message cap",
         "hint": "Maximum number of source messages kept on a merged memory."
       }
+    },
+    "archive": {
+      "description": "Source archive (queried by tools only)",
+      "enabled": {
+        "description": "Enable source archive"
+      },
+      "query_enabled": {
+        "description": "Register query_chat_events"
+      },
+      "capture_mode": {
+        "description": "Capture policy",
+        "labels": [
+          "Off",
+          "Inherit group capture",
+          "All permitted messages"
+        ]
+      },
+      "result_chars": {
+        "description": "Maximum result characters"
+      },
+      "max_candidates": {
+        "description": "Maximum topic candidates"
+      },
+      "capture_queue_size": {
+        "description": "Capture queue capacity"
+      }
     }
   },
   "pages": {

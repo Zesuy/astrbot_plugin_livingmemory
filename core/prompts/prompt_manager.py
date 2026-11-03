@@ -30,6 +30,14 @@ from astrbot.api import logger
 # ---------------------------------------------------------------------------
 
 PROMPT_REGISTRY: dict[str, dict[str, Any]] = {
+    "event_summary_prompt": {
+        "id": "event_summary_prompt", "name": "客观事件记录 Prompt", "name_en": "Source-bound Event Prompt",
+        "description": "客观整理聊天事件，引用输入ref，由程序回填真实时间、作者和消息ID",
+        "description_en": "Extract objective events citing supplied message refs",
+        "usage_note": "events模式使用。输出JSON与events/source_refs；不得把计划、玩笑或他人经历写成Bot亲历。",
+        "usage_note_en": "Used in events mode; output JSON events with source_refs.",
+        "category": "memory_processing", "file": "event_summary_prompt.txt", "variables": ["{conversation}", "{current_date}"],
+    },
     "group_chat_prompt": {
         "id": "group_chat_prompt",
         "name": "群聊记忆总结 Prompt",
