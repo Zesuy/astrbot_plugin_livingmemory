@@ -118,6 +118,7 @@ class MemoryHandlerIoMixin:
 
         imported_ids: list[int] = []
         skipped_duplicates = 0
+        skipped_no_memory = 0
         import_errors = list(parse_errors)
         active_keys = set(existing_keys)
         for entry in entries:
@@ -141,6 +142,9 @@ class MemoryHandlerIoMixin:
                     content_text = generated_content
                     metadata.update(generated_metadata or {})
                     importance = generated_importance
+                    if metadata.get("processing_status") == "processed_no_memory":
+                        skipped_no_memory += 1
+                        continue
 
                 key = memory_import_key(
                     content_text, entry.session_id, entry.persona_id
@@ -194,6 +198,7 @@ class MemoryHandlerIoMixin:
                 "total": len(entries) + len(parse_errors),
                 "imported_count": len(imported_ids),
                 "skipped_duplicate_count": skipped_duplicates,
+                "processed_no_memory_count": skipped_no_memory,
                 "failed_count": len(import_errors),
                 "imported_ids": imported_ids,
                 "errors": import_errors[:50],

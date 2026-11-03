@@ -22,14 +22,14 @@ class MemoryProcessorBuildMixin:
         构建存储格式
 
         Args:
-            fallback_excerpt: 当摘要为空时使用的对话摘录
+            fallback_excerpt: 兼容旧调用签名；不再将原文摘录作为记忆
             structured_data: 结构化数据
             is_group_chat: 是否为群聊
 
         Returns:
             (content, metadata) 元组
         """
-        summary = str(structured_data.get("summary", "")).strip()
+        summary = str(structured_data.get("summary") or "").strip()
         key_facts = structured_data.get("key_facts", [])
 
         # 检索内容恒为 summary + key_facts 的富文本：content 是 BM25/FAISS 的
@@ -41,7 +41,7 @@ class MemoryProcessorBuildMixin:
             rich_parts.append("；".join(str(f) for f in key_facts[:5] if f))
         rich_content = " | ".join(rich_parts)
 
-        content = rich_content if rich_content else fallback_excerpt
+        content = rich_content
 
         # canonical_summary：自定义提示词若输出了该字段则保留（供图抽取等使用），
         # 否则回退为与 content 一致的富文本，保持 v2 metadata 结构兼容。
@@ -82,6 +82,8 @@ class MemoryProcessorBuildMixin:
         This is a post-processing step after process_conversation().
         It does NOT make additional LLM calls — classification is rule-based.
         """
+        if metadata.get("processing_status") == "processed_no_memory" or metadata.get("summary_quality") == "low":
+            return []
         if not self.config.get("atom_enabled", True):
             return []
         if metadata.get("summary_style") == "events" and metadata.get("events"):

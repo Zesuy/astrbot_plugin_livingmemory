@@ -64,7 +64,7 @@ async def test_process_conversation_success():
             "importance":0.8
         }"""
     )
-    processor = MemoryProcessor(llm_provider=llm, context=None)
+    processor = MemoryProcessor(llm_provider=llm, context=None, config={"summary_mode": "persona"})
 
     content, metadata, importance = await processor.process_conversation(
         messages=_make_messages(),
@@ -79,9 +79,9 @@ async def test_process_conversation_success():
 
 
 @pytest.mark.asyncio
-async def test_process_conversation_handles_non_json_response_with_fallback():
+async def test_process_conversation_discards_non_json_response():
     llm = _DummyLLMProvider("summary=测试, importance=0.6")
-    processor = MemoryProcessor(llm_provider=llm, context=None)
+    processor = MemoryProcessor(llm_provider=llm, context=None, config={"summary_mode": "persona"})
 
     content, metadata, importance = await processor.process_conversation(
         messages=_make_messages(),
@@ -89,9 +89,9 @@ async def test_process_conversation_handles_non_json_response_with_fallback():
         persona_id=None,
     )
 
-    assert isinstance(content, str) and len(content) > 0
-    assert "topics" in metadata
-    assert 0.0 <= importance <= 1.0
+    assert content == ""
+    assert metadata["processing_status"] == "processed_no_memory"
+    assert importance == 0
 
 
 class TestPromptLiveReload:
@@ -114,7 +114,7 @@ class TestPromptLiveReload:
 
     def test_get_chat_prompt_returns_valid_content(self):
         llm = _DummyLLMProvider("{}")
-        processor = MemoryProcessor(llm_provider=llm, context=None)
+        processor = MemoryProcessor(llm_provider=llm, context=None, config={"summary_mode": "persona"})
         live = processor._get_chat_prompt(is_group_chat=False)
         assert isinstance(live, str) and len(live) > 50
         assert "{conversation}" in live
@@ -164,7 +164,7 @@ async def test_dual_channel_summary_stores_canonical_and_persona():
             "importance":0.8
         }"""
     )
-    processor = MemoryProcessor(llm_provider=llm, context=None)
+    processor = MemoryProcessor(llm_provider=llm, context=None, config={"summary_mode": "persona"})
 
     content, metadata, importance = await processor.process_conversation(
         messages=_make_messages(),
@@ -195,18 +195,18 @@ async def test_dual_channel_summary_stores_canonical_and_persona():
 @pytest.mark.asyncio
 async def test_source_time_tags_come_from_message_timestamps_without_rewriting_summary():
     llm = _DummyLLMProvider(
-        '{"summary":"记住这件事", "canonical_summary":"发布计划已确认", '
+        '{"summary":"张三确认本次新版本的发布计划", "canonical_summary":"发布计划已确认", '
         '"topics":["发布"], "key_facts":["发布计划已确认"], '
         '"sentiment":"neutral", "importance":0.8}'
     )
     messages = _make_messages()
     messages[0].timestamp = datetime(2025, 5, 1, 9, 0).timestamp()
     messages[1].timestamp = datetime(2025, 5, 2, 10, 0).timestamp()
-    processor = MemoryProcessor(llm_provider=llm, context=None)
+    processor = MemoryProcessor(llm_provider=llm, context=None, config={"summary_mode": "persona"})
 
     content, metadata, _ = await processor.process_conversation(messages)
 
-    assert content == "记住这件事 | 发布计划已确认"
+    assert content == "张三确认本次新版本的发布计划 | 发布计划已确认"
     assert metadata["canonical_summary"] == "发布计划已确认"
     assert metadata["time_tags"] == ["2025-05-01", "2025-05-02"]
     assert metadata["source_time_label"] == "2025-05-01 - 2025-05-02"
@@ -238,7 +238,7 @@ async def test_canonical_summary_falls_back_to_rich_text():
             "importance":0.7
         }"""
     )
-    processor = MemoryProcessor(llm_provider=llm, context=None)
+    processor = MemoryProcessor(llm_provider=llm, context=None, config={"summary_mode": "persona"})
 
     content, metadata, _ = await processor.process_conversation(
         messages=_make_messages(),
@@ -265,7 +265,7 @@ async def test_summary_quality_normal_for_valid_response():
             "importance":0.8
         }"""
     )
-    processor = MemoryProcessor(llm_provider=llm, context=None)
+    processor = MemoryProcessor(llm_provider=llm, context=None, config={"summary_mode": "persona"})
 
     _, metadata, _ = await processor.process_conversation(
         messages=_make_messages(),
@@ -288,7 +288,7 @@ async def test_summary_quality_low_for_empty_summary():
             "importance":0.5
         }"""
     )
-    processor = MemoryProcessor(llm_provider=llm, context=None)
+    processor = MemoryProcessor(llm_provider=llm, context=None, config={"summary_mode": "persona"})
 
     _, metadata, _ = await processor.process_conversation(
         messages=_make_messages(),
@@ -311,7 +311,7 @@ async def test_summary_quality_low_for_missing_key_facts():
             "importance":0.5
         }"""
     )
-    processor = MemoryProcessor(llm_provider=llm, context=None)
+    processor = MemoryProcessor(llm_provider=llm, context=None, config={"summary_mode": "persona"})
 
     _, metadata, _ = await processor.process_conversation(
         messages=_make_messages(),
@@ -334,7 +334,7 @@ async def test_summary_quality_low_for_generic_terms():
             "importance":0.5
         }"""
     )
-    processor = MemoryProcessor(llm_provider=llm, context=None)
+    processor = MemoryProcessor(llm_provider=llm, context=None, config={"summary_mode": "persona"})
 
     _, metadata, _ = await processor.process_conversation(
         messages=_make_messages(),
@@ -501,7 +501,7 @@ async def test_process_group_chat_sets_interaction_type():
             "importance":0.75
         }"""
     )
-    processor = MemoryProcessor(llm_provider=llm, context=None)
+    processor = MemoryProcessor(llm_provider=llm, context=None, config={"summary_mode": "persona"})
 
     content, metadata, importance = await processor.process_conversation(
         messages=_make_group_messages(),
@@ -526,7 +526,7 @@ async def test_process_group_chat_extracts_participants():
             "importance":0.7
         }"""
     )
-    processor = MemoryProcessor(llm_provider=llm, context=None)
+    processor = MemoryProcessor(llm_provider=llm, context=None, config={"summary_mode": "persona"})
 
     _, metadata, _ = await processor.process_conversation(
         messages=_make_group_messages(),
@@ -553,7 +553,7 @@ async def test_process_group_chat_dual_channel_summary():
             "importance":0.8
         }"""
     )
-    processor = MemoryProcessor(llm_provider=llm, context=None)
+    processor = MemoryProcessor(llm_provider=llm, context=None, config={"summary_mode": "persona"})
 
     content, metadata, _ = await processor.process_conversation(
         messages=_make_group_messages(),
@@ -575,14 +575,14 @@ async def test_process_group_chat_missing_participants_uses_default():
     """群聊 LLM 响应缺少 participants 字段时，应使用空列表默认值。"""
     llm = _DummyLLMProvider(
         """{
-            "summary":"群聊讨论了一些话题",
+            "summary":"张三与李四确认以后每周五发布新版本",
             "topics":["闲聊"],
-            "key_facts":["大家聊了很多"],
+            "key_facts":["张三与李四约定每周五发布"],
             "sentiment":"neutral",
             "importance":0.5
         }"""
     )
-    processor = MemoryProcessor(llm_provider=llm, context=None)
+    processor = MemoryProcessor(llm_provider=llm, context=None, config={"summary_mode": "persona"})
 
     _, metadata, _ = await processor.process_conversation(
         messages=_make_group_messages(),
@@ -607,7 +607,7 @@ async def test_process_private_chat_no_participants_field():
             "importance":0.8
         }"""
     )
-    processor = MemoryProcessor(llm_provider=llm, context=None)
+    processor = MemoryProcessor(llm_provider=llm, context=None, config={"summary_mode": "persona"})
 
     _, metadata, _ = await processor.process_conversation(
         messages=_make_messages(),
@@ -649,7 +649,7 @@ async def test_process_group_chat_long_content():
             "importance":0.6
         }"""
     )
-    processor = MemoryProcessor(llm_provider=llm, context=None)
+    processor = MemoryProcessor(llm_provider=llm, context=None, config={"summary_mode": "persona"})
 
     content, metadata, importance = await processor.process_conversation(
         messages=long_messages,
@@ -676,7 +676,7 @@ async def test_process_group_chat_quality_low_for_generic_terms():
             "importance":0.4
         }"""
     )
-    processor = MemoryProcessor(llm_provider=llm, context=None)
+    processor = MemoryProcessor(llm_provider=llm, context=None, config={"summary_mode": "persona"})
 
     _, metadata, _ = await processor.process_conversation(
         messages=_make_group_messages(),

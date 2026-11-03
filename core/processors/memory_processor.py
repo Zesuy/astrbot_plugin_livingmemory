@@ -168,8 +168,6 @@ class MemoryProcessor(MemoryProcessorParseMixin, MemoryProcessorBuildMixin):
         Returns:
             str: 包含人格提示的 system_prompt
         """
-        if self.config.get("summary_mode", "events") == "events":
-            return "你是客观的群聊事件记录器。只总结给定消息并输出JSON，不扮演Bot，不附加人格和第一人称经历。使用source_refs引用真实输入；计划、玩笑、成员自述与Bot说法必须保留其性质。相对时间必须以消息的发送时间转换，不能以本次请求的运行时刻改写历史事件日期。"
         current_date = datetime.now().strftime("%Y-%m-%d %H:%M")
 
         # 尝试从 PromptManager 获取基础 system prompt
@@ -185,6 +183,14 @@ class MemoryProcessor(MemoryProcessorParseMixin, MemoryProcessorBuildMixin):
                 base_prompt = self._build_base_prompt_fallback(current_date)
         except Exception:
             base_prompt = self._build_base_prompt_fallback(current_date)
+
+        if self.config.get("summary_mode", "events") == "events":
+            return base_prompt + (
+                "\n只提取对未来有持久价值、由真实消息支持的事实、约定和技术信息。"
+                "不要把调侃、表情、一时情绪、争论或Bot认错当成长期记忆。"
+                "无持久价值时返回events: []、key_facts: []是正常成功，最期望如此，不得凑数。"
+                "不扮演Bot、不附加人格，使用source_refs引用输入；相对时间以消息发送时间为准。"
+            )
 
         if not persona_id:
             logger.debug("[MemoryProcessor] 未指定人格ID，使用基础提示词")
@@ -523,21 +529,29 @@ class MemoryProcessor(MemoryProcessorParseMixin, MemoryProcessorBuildMixin):
 
             # 4.5 质量校验
             quality = self._validate_summary_quality(structured_data)
-            if quality == "low":
-                logger.warning(
-                    "[MemoryProcessor] 总结质量不达标（low），将标记但仍写入"
-                )
-            structured_data["_quality"] = quality
+            if structured_data.get("quality") == "low" or structured_data.get("summary_quality") == "low":
+                quality = "low"
+            from ..utils.recall_policy import is_non_substantive
 
-            # 5. 构建存储格式
-            fallback_excerpt = (
-                conversation_text[:200] + "..."
-                if len(conversation_text) > 200
-                else conversation_text
-            )
-            content, metadata = self._build_storage_format(
-                fallback_excerpt, structured_data, is_group_chat
-            )
+            reason = None
+            if event_mode and not events:
+                reason = "no_durable_events"
+            elif quality == "low":
+                reason = "low_quality"
+            content, metadata = self._build_storage_format("", structured_data, is_group_chat)
+            metadata["summary_quality"] = quality
+            if reason is None and (not content.strip() or is_non_substantive(content, metadata)):
+                reason = "empty_summary"
+            if reason:
+                logger.info(f"[MemoryProcessor] processed_no_memory: {reason}")
+                return "", {
+                    "processing_status": "processed_no_memory",
+                    "no_memory_reason": reason,
+                    "summary_quality": quality,
+                    "events": [], "key_facts": [],
+                }, 0.0
+
+            structured_data["_quality"] = quality
             if event_mode and events:
                 content = structured_data["canonical_summary"]
                 metadata["persona_summary"] = ""
@@ -552,12 +566,6 @@ class MemoryProcessor(MemoryProcessorParseMixin, MemoryProcessorBuildMixin):
                 metadata["events"] = events
                 metadata["event_schema_version"] = "v1"
                 metadata["event_source_status"] = "verified" if events and all(e["source_verified"] for e in events) else "missing_or_invalid"
-            from ..utils.recall_policy import is_non_substantive
-
-            if is_non_substantive(content, metadata):
-                metadata["recall_excluded"] = True
-                metadata["recall_exclusion_reason"] = "empty_summary"
-
             importance = float(structured_data.get("importance", 0.5))
 
             logger.info(

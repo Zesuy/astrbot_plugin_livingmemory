@@ -19,11 +19,12 @@ def is_non_substantive(content: Any, metadata: Any) -> bool:
     """Require both empty structured fields and an entire no-input declaration.
 
     Low quality alone, a short summary, or a quoted no-input phrase is insufficient.
-    Explicit False provides a reversible override for audited legacy records.
+    Explicit False/0 provides a reversible override for audited legacy records.
+    SQLite audit tools may encode boolean flags as integer 0/1.
     """
     metadata = metadata if isinstance(metadata, dict) else {}
-    if isinstance(metadata.get("recall_excluded"), bool):
-        return metadata["recall_excluded"]
+    if metadata.get("recall_excluded") in (True, False) and "recall_excluded" in metadata:
+        return bool(metadata["recall_excluded"])
     if metadata.get("summary_quality") != "low":
         return False
     if any(metadata.get(key) for key in ("topics", "key_facts", "participants")):

@@ -646,6 +646,13 @@ class CommandHandler:
                 persona_id=persona_id,
             )
 
+            if metadata.get("processing_status") == "processed_no_memory":
+                await self.conversation_manager.commit_summary_cursor(
+                    session_id, history_messages[-1], None
+                )
+                yield event.plain_result("已处理本段聊天，没有需要保存的长期记忆。")
+                return
+
             atoms = self._memory_processor.classify_atoms_from_metadata(
                 metadata=metadata,
                 parent_importance=importance,

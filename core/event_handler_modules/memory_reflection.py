@@ -843,6 +843,11 @@ class MemoryReflection:
                         persona_id=persona_id,
                     )
 
+                    if metadata.get("processing_status") == "processed_no_memory":
+                        return await self.conversation_manager.commit_summary_cursor(
+                            session_id, history_messages[-1], expected_revision
+                        )
+
                     atoms = self.memory_processor.classify_atoms_from_metadata(
                         metadata=metadata,
                         parent_importance=importance,

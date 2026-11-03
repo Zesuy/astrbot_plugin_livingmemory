@@ -258,6 +258,11 @@ class MemoryHandler(MemoryHandlerUpdateMixin, MemoryHandlerIoMixin):
                 is_group_chat=is_group_chat,
                 persona_id=current_metadata.get("persona_id"),
             )
+            if metadata.get("processing_status") == "processed_no_memory":
+                return self.utils.ok({
+                    "processing_status": "processed_no_memory",
+                    "message": "原文没有可保存的长期记忆，已保留原记录；可通过审计工具软隔离。",
+                })
             metadata["source_window"] = {
                 **(current_metadata.get("source_window") or {}),
                 "resummarized_from": memory_id,
