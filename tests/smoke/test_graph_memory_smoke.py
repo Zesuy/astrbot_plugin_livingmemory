@@ -187,7 +187,7 @@ async def test_smoke_event_recall_injects_memory_into_prompt(tmp_path: Path):
             await handler.handle_memory_recall(_make_event("alice"), req)
 
         assert len(req.extra_user_content_parts) == 1
-        assert "<RAG-Faiss-Memory>" in req.extra_user_content_parts[0].text
+        assert "[长期记忆 / 群友印象]" in req.extra_user_content_parts[0].text
         assert "project sync record" in req.extra_user_content_parts[0].text
         conversation_manager.add_message_from_event.assert_awaited_once()
     finally:

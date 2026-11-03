@@ -1197,5 +1197,28 @@
                 "description": "有界捕获队列容量"
             }
         }
+    },
+    "dialogue_buffer": {
+        "description": "群聊旁听滑窗",
+        "hint": "仅在内存中保留各群最近的纯文本消息，在唤醒时作为背景。重启后清空，不调用模型。",
+        "type": "object",
+        "items": {
+            "enabled": {
+                "description": "启用群聊近况",
+                "type": "bool",
+                "default": true
+            },
+            "max_messages": {
+                "description": "每群消息上限",
+                "hint": "每群保留及注入 10–100 条消息。",
+                "type": "int",
+                "default": 50,
+                "slider": {
+                    "min": 10,
+                    "max": 100,
+                    "step": 1
+                }
+            }
+        }
     }
 }

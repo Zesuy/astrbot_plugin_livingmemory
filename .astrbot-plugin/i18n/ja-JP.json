@@ -285,6 +285,18 @@
       },
       "max_messages_per_segment": {
         "description": "要約区間あたりのメッセージ上限"
+      },
+      "summary_mode": {
+        "description": "記憶の要約方式",
+        "hint": "events：客観的な出来事と出典メッセージ。persona：従来の一人称の回想。応答の人格には影響しません。",
+        "options": {
+          "events": "客観的な出来事",
+          "persona": "人格による回想"
+        },
+        "labels": [
+          "客観的な出来事",
+          "人格による回想"
+        ]
       }
     },
     "agent_tools": {
@@ -571,6 +583,17 @@
       },
       "capture_queue_size": {
         "description": "収録キューの容量"
+      }
+    },
+    "dialogue_buffer": {
+      "description": "グループ会話ウィンドウ",
+      "hint": "直近の会話をメモリ内に保持し、応答時に参照します。モデル呼び出しはなく、再起動で消去されます。",
+      "enabled": {
+        "description": "グループの近況を有効化"
+      },
+      "max_messages": {
+        "description": "グループごとのメッセージ上限",
+        "hint": "各グループの直近 10～100 件を保持して注入します。"
       }
     }
   },

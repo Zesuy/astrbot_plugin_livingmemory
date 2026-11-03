@@ -84,7 +84,7 @@ async def test_handle_memory_recall_injection_fake_tool_call(handler, memory_eng
     assert len(req.extra_user_content_parts) == 1
     text_part = req.extra_user_content_parts[0]
     assert "用户喜欢吃火锅" in text_part.text
-    assert "<RAG-Faiss-Memory>" in text_part.text
+    assert "[长期记忆 / 群友印象]" in text_part.text
     assert getattr(text_part, "_no_save", False) is True
 
 
@@ -230,7 +230,7 @@ async def test_handle_memory_recall_fake_tool_call_fallback_on_gemini(
     assert len(req.extra_user_content_parts) == 1
     text_part = req.extra_user_content_parts[0]
     assert "用户喜欢吃火锅" in text_part.text
-    assert "<RAG-Faiss-Memory>" in text_part.text
+    assert "[长期记忆 / 群友印象]" in text_part.text
     assert getattr(text_part, "_no_save", False) is True
 
 
@@ -395,7 +395,7 @@ async def test_handle_memory_recall_injection_fake_tool_call_deepseek_v4(
     assert len(req.extra_user_content_parts) == 1
     text_part = req.extra_user_content_parts[0]
     assert "用户喜欢吃火锅" in text_part.text
-    assert "<RAG-Faiss-Memory>" in text_part.text
+    assert "[长期记忆 / 群友印象]" in text_part.text
     assert getattr(text_part, "_no_save", False) is True
 
 
@@ -458,7 +458,7 @@ async def test_handle_memory_recall_injection_fake_tool_call_deepseek_v4_on_gemi
     assert len(req.extra_user_content_parts) == 1
     text_part = req.extra_user_content_parts[0]
     assert "用户喜欢吃火锅" in text_part.text
-    assert "<RAG-Faiss-Memory>" in text_part.text
+    assert "[长期记忆 / 群友印象]" in text_part.text
     assert getattr(text_part, "_no_save", False) is True
 
 

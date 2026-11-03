@@ -133,7 +133,7 @@ class PassiveGroupCaptureFilter(CustomFilter):
             return False
         if not plugin.config_manager.get(
             "session_manager.enable_full_group_capture", True
-        ):
+        ) and not plugin.config_manager.get("dialogue_buffer.enabled", True):
             return False
         try:
             if event.get_message_type() != MessageType.GROUP_MESSAGE:

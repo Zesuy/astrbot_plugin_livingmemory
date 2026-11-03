@@ -285,6 +285,18 @@
       },
       "max_messages_per_segment": {
         "description": "单段总结消息上限"
+      },
+      "summary_mode": {
+        "description": "记忆总结方式",
+        "hint": "events：客观事件与来源消息；persona：旧版第一人称人格回忆。回答时的人格不受影响。",
+        "options": {
+          "events": "客观事件",
+          "persona": "人格回忆"
+        },
+        "labels": [
+          "客观事件",
+          "人格回忆"
+        ]
       }
     },
     "agent_tools": {
@@ -571,6 +583,17 @@
       },
       "capture_queue_size": {
         "description": "捕获队列容量"
+      }
+    },
+    "dialogue_buffer": {
+      "description": "群聊旁听滑窗",
+      "hint": "在内存中保留群聊近况，唤醒时注入，不调用模型；重启清空。",
+      "enabled": {
+        "description": "启用群聊近况"
+      },
+      "max_messages": {
+        "description": "每群消息上限",
+        "hint": "每群保留及注入 10–100 条消息。"
       }
     }
   },

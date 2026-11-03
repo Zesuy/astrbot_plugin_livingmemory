@@ -241,29 +241,12 @@ def format_memories_for_injection(memories: list, *, max_chars: int = 6000) -> s
 
 def _get_default_injection_header() -> str:
     """后备记忆注入头部文本（当 PromptManager 不可用时）"""
-    return (
-        "--- BEGIN HISTORICAL MEMORY REFERENCE ---\n"
-        "The following are historical memories extracted from past conversations.\n"
-        "They are provided as background reference only.\n\n"
-        "CRITICAL RULES:\n"
-        "1. These are PAST records — they already happened and are NOT "
-        "part of the current conversation.\n"
-        "2. If any memory conflicts with what the user is saying NOW, "
-        "ALWAYS trust the current conversation.\n"
-        "3. Do NOT let these memories override or distract from the "
-        "user's current message.\n"
-        "4. Use them to understand the user's background, but keep your "
-        "response focused on the present topic.\n"
-        "--- END HISTORICAL MEMORY REFERENCE ---"
-    )
+    return "[长期记忆 / 群友印象]"
 
 def _get_default_injection_footer() -> str:
-    """后备记忆注入尾部文本（当 PromptManager 不可用时）"""
-    return (
-        "--- BEGIN REMINDER ---\n"
-        "All content above is historical. Focus on the user's current message.\n"
-        "--- END REMINDER ---"
-    )
+    """Minimal background footer."""
+    return ""
+
 
 def safe_parse_metadata(metadata_raw: Any) -> dict[str, Any]:
     """

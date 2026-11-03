@@ -200,7 +200,7 @@ class TestFormatMemoriesForInjection:
         result = format_memories_for_injection(memories)
 
         assert len(result) <= 6000
-        assert "--- END" in result or "--- END" in result.splitlines()[-1]
+        assert result.endswith("</RAG-Faiss-Memory>")
 
     def test_format_handles_missing_fields(self):
         """测试处理缺失字段"""

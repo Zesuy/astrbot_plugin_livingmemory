@@ -10,6 +10,7 @@ from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent
 from astrbot.api.platform import MessageType
 
+from ..dialogue_buffer import dialogue_event_id
 from ..memory_scope import is_event_memory_allowed, is_suspicious_session_id
 
 if TYPE_CHECKING:
@@ -26,6 +27,7 @@ class GroupCapture:
         config_manager: "ConfigManager",
         conversation_manager: "ConversationManager",
         message_utils: "MessageUtils",
+        dialogue_buffer=None,
     ):
         """
         初始化群聊消息捕获模块
@@ -38,15 +40,10 @@ class GroupCapture:
         self.config_manager = config_manager
         self.conversation_manager = conversation_manager
         self.message_utils = message_utils
+        self.dialogue_buffer = dialogue_buffer
 
     async def handle_all_group_messages(self, event: AstrMessageEvent):
         """Capture all group messages for memory storage"""
-        # 检查配置
-        if not self.config_manager.get(
-            "session_manager.enable_full_group_capture", True
-        ):
-            return
-
         # 只处理群聊消息
         if event.get_message_type() != MessageType.GROUP_MESSAGE:
             return
@@ -61,6 +58,28 @@ class GroupCapture:
 
         try:
             session_id = event.unified_msg_origin
+
+            if self.dialogue_buffer is not None and self.config_manager.get(
+                "dialogue_buffer.enabled", True
+            ):
+                # Plain components only: quoted text and attachment descriptions stay out.
+                from astrbot.core.message.components import Plain
+
+                content = "".join(
+                    c.text for c in event.get_messages() if isinstance(c, Plain)
+                )
+                self.dialogue_buffer.add_message(
+                    event.unified_msg_origin,
+                    event.get_sender_name(),
+                    event.get_sender_id(),
+                    content,
+                    message_id=dialogue_event_id(event),
+                    timestamp=getattr(event.message_obj, "timestamp", None),
+                )
+            if not self.config_manager.get(
+                "session_manager.enable_full_group_capture", True
+            ):
+                return
 
             # 检测异常session_id
             if is_suspicious_session_id(session_id):

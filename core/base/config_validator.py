@@ -456,9 +456,15 @@ class MemoryDedupConfig(BaseModel):
     )
 
 
+class DialogueBufferConfig(BaseModel):
+    enabled: bool = True
+    max_messages: int = Field(default=50, ge=10, le=100)
+
+
 class LivingMemoryConfig(BaseModel):
     """完整插件配置"""
 
+    dialogue_buffer: DialogueBufferConfig = Field(default_factory=DialogueBufferConfig)
     session_manager: SessionManagerConfig = Field(default_factory=SessionManagerConfig)
     recall_engine: RecallEngineConfig = Field(default_factory=RecallEngineConfig)
     reflection_engine: ReflectionEngineConfig = Field(

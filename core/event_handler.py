@@ -11,6 +11,7 @@ from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent
 from astrbot.api.provider import LLMResponse, ProviderRequest
 
+from .dialogue_buffer import DialogueBuffer
 from .base.config_manager import ConfigManager
 from .event_handler_modules import (
     GroupCapture,
@@ -55,10 +56,12 @@ class EventHandler:
         self.memory_processor = memory_processor
         self.conversation_manager = conversation_manager
 
+        self.dialogue_buffer = DialogueBuffer(config_manager.get("dialogue_buffer.max_messages", 50))
+
         # 初始化子模块
         self._message_utils = MessageUtils(config_manager, conversation_manager)
         self._group_capture = GroupCapture(
-            config_manager, conversation_manager, self._message_utils
+            config_manager, conversation_manager, self._message_utils, self.dialogue_buffer
         )
         # 后台存储任务跟踪
         self._storage_tasks: set[asyncio.Task] = set()
@@ -77,6 +80,7 @@ class EventHandler:
             self._message_utils,
             self._injection_adapter,
             storage_session_tasks=self._storage_session_tasks,
+            dialogue_buffer=self.dialogue_buffer,
         )
 
         self._memory_reflection = MemoryReflection(
@@ -92,6 +96,9 @@ class EventHandler:
             consolidation_manager,
             storage_session_tasks=self._storage_session_tasks,
         )
+
+    def get_dialogue_buffer(self) -> DialogueBuffer:
+        return self.dialogue_buffer
 
     async def handle_all_group_messages(self, event: AstrMessageEvent):
         """Capture all group messages for memory storage"""
@@ -114,6 +121,7 @@ class EventHandler:
         session_id = event.unified_msg_origin
         if not session_id:
             return
+        self.dialogue_buffer.clear(session_id)
         try:
             await self.conversation_manager.clear_session(session_id)
             logger.info(f"[{session_id}] 已同步清空插件会话上下文（/reset 或 /new）")
@@ -122,6 +130,7 @@ class EventHandler:
 
     async def shutdown(self):
         """关闭事件处理器，限时等待存储任务完成，超时则取消。"""
+        self.dialogue_buffer.clear()
         self._shutting_down = True
         self._memory_reflection.set_shutting_down(True)
         pending = [task for task in self._storage_tasks if not task.done()]

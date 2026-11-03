@@ -14,6 +14,8 @@ from astrbot.api.platform import MessageType
 from astrbot.api.provider import ProviderRequest
 from astrbot.core.agent.message import TextPart
 
+from ..clean_context import CleanContextInjector
+from ..dialogue_buffer import dialogue_event_id
 from ..memory_scope import (
     is_event_memory_allowed,
     is_suspicious_session_id,
@@ -21,7 +23,6 @@ from ..memory_scope import (
 )
 from ..utils import (
     OperationContext,
-    format_memories_for_injection,
     get_persona_id,
 )
 from .memory_reflection import cancel_session_storage_task
@@ -46,6 +47,7 @@ class MemoryRecall:
         message_utils: "MessageUtils",
         injection_adapter: "InjectionAdapter",
         storage_session_tasks: dict[str, asyncio.Task] | None = None,
+        dialogue_buffer=None,
     ):
         """
         初始化记忆召回模块
@@ -60,6 +62,7 @@ class MemoryRecall:
             storage_session_tasks: 会话 -> 进行中总结任务映射（共享状态），
                 用于在检测到 WebUI 编辑/重试回滚后取消过期总结任务
         """
+        self.dialogue_buffer = dialogue_buffer
         self.context = context
         self.config_manager = config_manager
         self.memory_engine = memory_engine
@@ -133,6 +136,7 @@ class MemoryRecall:
                         )
                 # 新规则的临时片段只携带本插件专用标记，去重独立于旧清理开关，
                 # 重复执行钩子也不会叠加。
+                self._remove_clean_context_parts(req)
                 self._remove_agent_recall_policy_from_context(req)
 
                 # 先提取用户消息（消息存储和召回都需要）
@@ -144,6 +148,7 @@ class MemoryRecall:
 
                 # 存储用户消息（仅私聊），无论是否启用召回都需要
                 is_group = event.get_message_type() == MessageType.GROUP_MESSAGE
+                dialogue_snapshot = self._get_dialogue_context(event)
 
                 # 与 AstrBot LLM 历史对账：WebUI 编辑/重试会截断 LLM 历史，
                 # 插件会话库需同步清理被撤销的尾部轮次（仅私聊；群聊被动
@@ -177,10 +182,12 @@ class MemoryRecall:
                     logger.info(
                         f"[{session_id}] top_k={top_k} <= 0，跳过记忆检索和注入"
                     )
+                    self._inject_clean_context(event, req, [], dialogue_snapshot)
                     return
 
                 if not actual_query:
                     logger.warning(f"[{session_id}] 原始用户消息为空，跳过记忆召回")
+                    self._inject_clean_context(event, req, [], dialogue_snapshot)
                     return
 
                 # 获取过滤配置
@@ -252,12 +259,16 @@ class MemoryRecall:
                     f"[{session_id}] 开始记忆召回，查询='{query_for_search[:80]}...'"
                 )
 
-                recalled_memories = await self.memory_engine.search_memories(
-                    query=query_for_search,
-                    k=self.config_manager.get("recall_engine.top_k", 5),
-                    session_id=recall_session_id,
-                    persona_id=recall_persona_id,
-                )
+                try:
+                    recalled_memories = await self.memory_engine.search_memories(
+                        query=query_for_search,
+                        k=self.config_manager.get("recall_engine.top_k", 5),
+                        session_id=recall_session_id,
+                        persona_id=recall_persona_id,
+                    )
+                except Exception:
+                    logger.warning("长期记忆检索失败，保留本群近况", exc_info=True)
+                    recalled_memories = []
 
                 if recalled_memories:
                     logger.info(
@@ -298,26 +309,49 @@ class MemoryRecall:
                             f"{injection_method}: {fallback_reason}"
                         )
 
-                    memory_str = format_memories_for_injection(memory_list)
-
-                    # 唯一注入方式（add-only）：将记忆作为临时片段追加到
-                    # 当前用户消息末尾。mark_as_temp 标记的 part 由 AstrBot
-                    # 在保存对话历史时过滤，注入不会写入 AstrBot 的历史，
-                    # 也不影响前缀缓存。
-                    req.extra_user_content_parts.append(
-                        TextPart(text=memory_str).mark_as_temp()
-                    )
-                    logger.info(
-                        f"[{session_id}] 成功向用户消息末尾注入 "
-                        f"{len(recalled_memories)} 条记忆"
-                    )
+                    self._inject_clean_context(event, req, memory_list, dialogue_snapshot)
                 else:
+                    self._inject_clean_context(event, req, [], dialogue_snapshot)
                     logger.info(f"[{session_id}] 未找到相关记忆")
 
         except asyncio.CancelledError:
             raise
         except Exception as e:
             logger.error(f"处理 on_llm_request 钩子时发生错误: {e}", exc_info=True)
+
+    def _get_dialogue_context(self, event):
+        dialogue = ""
+        if (self.dialogue_buffer is not None
+                and event.get_message_type() == MessageType.GROUP_MESSAGE
+                and self.config_manager.get("dialogue_buffer.enabled", True)):
+            dialogue = self.dialogue_buffer.format_for_context(
+                event.unified_msg_origin,
+                max_count=self.config_manager.get("dialogue_buffer.max_messages", 50),
+                exclude_message_id=dialogue_event_id(event),
+            )
+        return dialogue
+
+    def _inject_clean_context(self, event, req, memories, dialogue=None):
+        if dialogue is None:
+            dialogue = self._get_dialogue_context(event)
+        speaker = event.get_sender_name()
+        if not isinstance(speaker, str):
+            speaker = ""
+        text = CleanContextInjector.format_context(dialogue, memories, speaker)
+        if text:
+            part = TextPart(text=text).mark_as_temp()
+            # Ownership is private runtime metadata, never added to the model text.
+            part.__dict__["_livingmemory_clean_context"] = True
+            req.extra_user_content_parts.append(part)
+
+    @staticmethod
+    def _remove_clean_context_parts(req):
+        parts = getattr(req, "extra_user_content_parts", None)
+        if parts:
+            req.extra_user_content_parts = [p for p in parts if not (
+                getattr(p, "_no_save", False)
+                and getattr(p, "_livingmemory_clean_context", False) is True
+            )]
 
     def _remove_agent_recall_policy_from_context(self, req: ProviderRequest) -> int:
         """移除本插件上一轮注入的自主回忆规则临时片段（重复钩子去重）。
@@ -545,6 +579,9 @@ class MemoryRecall:
 
         text = getattr(part, "text", "")
         return (
+            getattr(part, "_no_save", False)
+            and getattr(part, "_livingmemory_clean_context", False) is True
+        ) or (
             getattr(part, "_no_save", False)
             and isinstance(text, str)
             and MEMORY_INJECTION_HEADER in text

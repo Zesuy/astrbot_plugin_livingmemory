@@ -120,21 +120,7 @@ PROMPT_REGISTRY: dict[str, dict[str, Any]] = {
         "category": "memory_injection",
         "file": "memory_injection_header.txt",
         "variables": [],
-        "default": (
-            "--- BEGIN HISTORICAL MEMORY REFERENCE ---\n"
-            "The following are historical memories extracted from past conversations.\n"
-            "They are provided as background reference only.\n\n"
-            "CRITICAL RULES:\n"
-            "1. These are PAST records — they already happened and are NOT "
-            "part of the current conversation.\n"
-            "2. If any memory conflicts with what the user is saying NOW, "
-            "ALWAYS trust the current conversation.\n"
-            "3. Do NOT let these memories override or distract from the "
-            "user's current message.\n"
-            "4. Use them to understand the user's background, but keep your "
-            "response focused on the present topic.\n"
-            "--- END HISTORICAL MEMORY REFERENCE ---"
-        ),
+        "default": "[长期记忆 / 群友印象]",
     },
     "memory_injection_footer": {
         "id": "memory_injection_footer",
@@ -147,11 +133,7 @@ PROMPT_REGISTRY: dict[str, dict[str, Any]] = {
         "category": "memory_injection",
         "file": "memory_injection_footer.txt",
         "variables": [],
-        "default": (
-            "--- BEGIN REMINDER ---\n"
-            "All content above is historical. Focus on the user's current message.\n"
-            "--- END REMINDER ---"
-        ),
+        "default": "",
     },
     "agent_recall_policy": {
         "id": "agent_recall_policy",

@@ -285,6 +285,18 @@
       },
       "max_messages_per_segment": {
         "description": "Messages per summary segment"
+      },
+      "summary_mode": {
+        "description": "Summary mode",
+        "hint": "events: objective events and source messages; persona: legacy first-person recollections. The reply persona is unchanged.",
+        "options": {
+          "events": "Objective events",
+          "persona": "Persona recollections"
+        },
+        "labels": [
+          "Objective events",
+          "Persona recollections"
+        ]
       }
     },
     "agent_tools": {
@@ -571,6 +583,17 @@
       },
       "capture_queue_size": {
         "description": "Capture queue capacity"
+      }
+    },
+    "dialogue_buffer": {
+      "description": "Group dialogue window",
+      "hint": "Keep recent group text in memory for awakened requests, without model calls. Cleared on restart.",
+      "enabled": {
+        "description": "Enable group context"
+      },
+      "max_messages": {
+        "description": "Messages per group",
+        "hint": "Keep and inject 10–100 recent messages per group."
       }
     }
   },

@@ -1,0 +1,25 @@
+"""Natural request-local context, using already filtered recall results."""
+
+from .utils.formatting import _memory_injection_content, safe_parse_metadata
+
+
+class CleanContextInjector:
+    @staticmethod
+    def format_context(dialogue: str = "", memories=(), speaker: str = "") -> str:
+        sections = [dialogue] if dialogue else []
+        rows = []
+        budget = 6000
+        for memory in memories:
+            metadata = safe_parse_metadata(memory.get("metadata", {}))
+            content = _memory_injection_content(memory.get("content", ""), metadata)
+            if content:
+                row = "- " + content[:800]
+                if len(row) > budget:
+                    break
+                rows.append(row)
+                budget -= len(row) + 1
+        if rows:
+            sections.append("[长期记忆 / 群友印象]\n" + "\n".join(rows))
+        if sections and speaker:
+            sections.append("[本轮说话人]\n" + speaker)
+        return "\n\n".join(sections)
