@@ -3,12 +3,14 @@
 Default is read-only. Use --apply to soft-exclude matching documents, and
 --rollback BATCH to undo that batch. Undo data stays in the same private DB.
 Rules are conservative heuristics: review the reported IDs before applying.
+Mixed-content candidates are reported for manual review and never soft-excluded.
 No document, atom, vector or source data is deleted. Restart/reload the plugin
 through its normal lifecycle after offline maintenance to refresh caches.
 """
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 import json
 from pathlib import Path
 import re
@@ -16,26 +18,48 @@ import sqlite3
 import uuid
 
 
-_RULES = {"low_quality", "empty", "reaction", "banter", "bot_apology"}
-_REACTION = re.compile(r"(?:\[(?:表情|图片|动画表情|image|face|emoji)[^\]]*\]|[\W_])+", re.I)
-_BANTER = re.compile(r"(?:哈哈+|呵呵+|笑死(?:了)?|绷不住(?:了)?|乐(?:死|了)|[哈嘿嘻]+|[6６]+|[?？!！]+)[。.!！~～\s]*")
-_APOLOGY = re.compile(r"(?:Bot|机器人|助手|鼠鼠|我)(?:表示|承认|回复|说)?[：:,，\s]*(?:对不起|抱歉|认错|错了|搞错了|弄错了|理解错了)[。.!！\s]*", re.I)
+_RULES = {"low_quality", "empty", "reaction", "banter", "bot_apology",
+          "pure_banter_or_bot_noise", "mixed_content"}
+_NOISE_KINDS = {"joke", "bot_reply", "other"}
+_REACTION = re.compile(r"\[(?:表情|图片|动画表情|image|face|emoji)[^\]]*\]|^[\W_]+$", re.I)
+_BANTER = re.compile(r"(?<!\w)(?:哈哈+|呵呵+|[哈嘿嘻]{2,}|[6６]{2,})(?!\w)|笑死|绷不住|调侃|闲聊|刚醒又困|排行榜.{0,30}(?:争辩|争论|打脸)")
+_APOLOGY = re.compile(r"(?:Bot|机器人|助手|鼠鼠|我)(?:表示|承认|回复|说|随后|最终|再次|主动)*[：:,，\s]*(?:对不起|抱歉|道歉|认错|错了|搞错了|弄错了|理解错了)", re.I)
+# Preserve durable facts even when an event was assigned a generic noise kind.
+_DURABLE = re.compile(r"计划|决定|约定|备份|每周|发布|修复|喜欢|偏好|安排|截止|负责")
+
+
+def event_kind_counts(metadata: dict) -> dict[str, int]:
+    """Count structured events without exposing their private summaries."""
+    events = metadata.get("events")
+    if not isinstance(events, list):
+        return {}
+    return dict(Counter(
+        str(event.get("kind") or "unknown") if isinstance(event, dict) else "unknown"
+        for event in events
+    ))
 
 
 def classify(text: str, metadata: dict) -> list[str]:
-    """Whole-text noise patterns avoid quarantining facts merely quoting a joke."""
+    """Find noise in narrative summaries, protecting any accompanying facts."""
     reasons = []
     if metadata.get("summary_quality") == "low":
         reasons.append("low_quality")
     text = str(metadata.get("canonical_summary") or text or "").strip()
     if not text:
         reasons.append("empty")
-    elif _REACTION.fullmatch(text):
-        reasons.append("reaction")
-    elif _BANTER.fullmatch(text):
-        reasons.append("banter")
-    elif _APOLOGY.fullmatch(text):
-        reasons.append("bot_apology")
+    for rule, pattern in (("reaction", _REACTION), ("banter", _BANTER), ("bot_apology", _APOLOGY)):
+        if pattern.search(text):
+            reasons.append(rule)
+    counts = event_kind_counts(metadata)
+    events = metadata.get("events")
+    event_text = " ".join(str(event.get("summary") or "") for event in events if isinstance(event, dict)) if isinstance(events, list) else ""
+    protected = bool(_DURABLE.search(text + " " + event_text)) or bool(set(counts) - _NOISE_KINDS)
+    if counts and not protected and set(counts) <= _NOISE_KINDS:
+        reasons.append("pure_banter_or_bot_noise")
+    if reasons and protected:
+        reasons.append("mixed_content")
+    elif counts and protected and set(counts) & _NOISE_KINDS:
+        reasons.append("mixed_content")
     return reasons
 
 
@@ -48,9 +72,14 @@ def scan(connection: sqlite3.Connection, rules: set[str]) -> list[dict]:
             continue  # malformed metadata must never be silently overwritten
         if not isinstance(metadata, dict) or metadata.get("recall_excluded") in (True, 1):
             continue
-        reasons = sorted(set(classify(text, metadata)) & rules)
+        all_reasons = set(classify(text, metadata))
+        reasons = sorted(all_reasons & rules)
         if reasons:
-            found.append({"id": identity, "rules": reasons, "before": raw})
+            # Keep protection visible even for a narrowly selected --rules list.
+            if "mixed_content" in all_reasons and "mixed_content" not in reasons:
+                reasons.append("mixed_content")
+            found.append({"id": identity, "rules": reasons, "before": raw,
+                          "event_kind_counts": event_kind_counts(metadata)})
     return found
 
 
@@ -60,6 +89,7 @@ def apply(connection: sqlite3.Connection, rules: set[str], ids: set[int] | None 
     with connection:
         connection.execute("BEGIN IMMEDIATE")
         matches = scan(connection, rules)
+        matches = [item for item in matches if "mixed_content" not in item["rules"]]
         if ids is not None:
             matches = [item for item in matches if item["id"] in ids]
         connection.execute("CREATE TABLE IF NOT EXISTS dirty_memory_audit (batch TEXT NOT NULL, document_id INTEGER NOT NULL, before_metadata TEXT, after_metadata TEXT NOT NULL, PRIMARY KEY(batch, document_id))")
@@ -109,7 +139,9 @@ def main() -> None:
             result = {"batch": batch, "excluded": count}
         else:
             matches = scan(connection, set(args.rules))
-            result = {"read_only": True, "candidates": [{"id": item["id"], "rules": item["rules"]} for item in matches]}
+            result = {"read_only": True, "candidates": [
+                {"id": item["id"], "rules": item["rules"], "event_kind_counts": item["event_kind_counts"]}
+                for item in matches]}
         print(json.dumps(result, ensure_ascii=False))
 
 

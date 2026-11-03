@@ -123,8 +123,75 @@ def test_reviewed_ids_and_rules_only(audit_db):
 
 
 @pytest.mark.parametrize('text', ['林舟喜欢哈哈这个表情包', '林舟发现Bot认错的原因是解析器错误，已修复', '林舟确认周五发布', '群友调侃后确认以后每周备份'])
-def test_noise_rules_do_not_match_fact_substrings(text):
-    assert classify(text, {}) == []
+def test_noise_rules_protect_fact_substrings(text):
+    reasons = classify(text, {})
+    assert not reasons or 'mixed_content' in reasons
+    assert 'pure_banter_or_bot_noise' not in reasons
+
+
+@pytest.mark.parametrize('summary,events,expected', [
+    ('大家围绕排行榜反复争辩，Bot认错并向群友道歉。',
+     [{'kind': 'joke', 'summary': '排行榜争辩被打脸'},
+      {'kind': 'bot_reply', 'summary': 'Bot认错道歉'}],
+     {'banter', 'bot_apology', 'pure_banter_or_bot_noise'}),
+    ('大家评价一位群友刚醒又困，随后闲聊吃鱼的话题。',
+     [{'kind': 'joke', 'summary': '调侃刚醒又困'},
+      {'kind': 'other', 'summary': '闲聊吃鱼'}],
+     {'banter', 'pure_banter_or_bot_noise'}),
+    ('群友调侃之后，认真确认以后每周备份资料的约定。',
+     [{'kind': 'joke', 'summary': '相互调侃'},
+      {'kind': 'discussion', 'summary': '约定每周备份'}],
+     {'banter', 'mixed_content'}),
+])
+def test_audit_long_event_narratives(summary, events, expected):
+    # Synthetic narrative at the production summary length; no private chat data.
+    narrative = '这段群聊按发言顺序记录了当时的来回交流。' * 36 + summary
+    assert len(narrative) > 700
+    reasons = set(classify('storage wrapper', {'canonical_summary': narrative, 'events': events}))
+    assert expected <= reasons
+    if 'mixed_content' in expected:
+        assert 'pure_banter_or_bot_noise' not in reasons
+
+
+@pytest.mark.parametrize('kind', ['plan', 'decision', 'discussion', 'self_report', 'unknown'])
+def test_audit_mixed_events_are_never_bulk_excluded(audit_db, kind):
+    metadata = json.dumps({'summary_quality': 'low', 'canonical_summary': '群友调侃，Bot认错。',
+                           'events': [{'kind': 'joke'}, {'kind': kind, 'summary': '保留这条事实'}]})
+    audit_db.execute('INSERT INTO documents VALUES (8, ?, ?)', ('storage wrapper', metadata))
+    audit_db.commit()
+    # Even a noise-only filter and explicitly reviewed ID cannot remove protection.
+    candidate = next(item for item in scan(audit_db, {'banter'}) if item['id'] == 8)
+    assert 'mixed_content' in candidate['rules']
+    assert candidate['event_kind_counts'] == {'joke': 1, kind: 1}
+    _, count = apply(audit_db, _RULES, {8})
+    assert count == 0
+    assert audit_db.execute('SELECT metadata FROM documents WHERE id=8').fetchone()[0] == metadata
+
+
+def test_audit_pure_events_apply_and_rollback(audit_db):
+    metadata = json.dumps({'events': [{'kind': 'joke'}, {'kind': 'bot_reply'}, {'kind': 'other'}]})
+    audit_db.execute('INSERT INTO documents VALUES (8, ?, ?)', ('长篇事件记录', metadata))
+    audit_db.commit()
+    candidate = next(item for item in scan(audit_db, _RULES) if item['id'] == 8)
+    assert candidate['event_kind_counts'] == {'joke': 1, 'bot_reply': 1, 'other': 1}
+    batch, count = apply(audit_db, {'pure_banter_or_bot_noise'}, {8})
+    assert count == 1
+    assert rollback(audit_db, batch) == 1
+    assert audit_db.execute('SELECT metadata FROM documents WHERE id=8').fetchone()[0] == metadata
+
+
+@pytest.mark.parametrize('text,rule', [
+    ('群友反复发送[表情]进行复读，交流到此结束。', 'reaction'),
+    ('排行榜争辩持续多轮，最后大家笑死。', 'banter'),
+    ('争论结束之后，Bot表示抱歉，承认自己看错排名。', 'bot_apology'),
+])
+def test_audit_text_search_inside_narrative(text, rule):
+    assert rule in classify(text, {})
+
+
+@pytest.mark.parametrize('events', [None, {}, 'joke', [], [None], [{'summary': '哈哈'}]])
+def test_audit_malformed_or_empty_events_do_not_claim_pure_noise(events):
+    assert 'pure_banter_or_bot_noise' not in classify('哈哈哈', {'events': events})
 
 @pytest.mark.asyncio
 async def test_manual_no_memory_advances_cursor_and_skips_write():
