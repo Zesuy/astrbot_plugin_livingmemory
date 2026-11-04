@@ -138,7 +138,8 @@ async def reconstruct(args, source, dest):
     else:
         selection = select_windows(source, args.scope, args.max_messages)
     code_files = sorted([*ROOT.joinpath("core").rglob("*.py"), *ROOT.joinpath("core/prompts").glob("*.txt"),
-                         *ROOT.joinpath("storage").rglob("*.py"), Path(__file__)])
+                         *ROOT.joinpath("storage").rglob("*.py"), Path(__file__),
+                         ROOT / "scripts/local_pilot_replay.py"])
     manifest = {"source_sha256": digest(source), "model": args.model,
                 "code_sha256": hashlib.sha256("".join(str(p.relative_to(ROOT)) + digest(p) for p in code_files).encode()).hexdigest(),
                 "selection": {k: v for k, v in selection.items() if k != "windows"}}
