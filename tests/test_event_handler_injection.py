@@ -30,6 +30,49 @@ from tests.event_handler_support import (
     memory_processor,
 )
 
+def test_clean_context_logs_full_injected_text(handler):
+    event = _make_event(group=True)
+    event.get_extra = Mock(return_value=None)
+    req = _make_req()
+    dialogue = "[群聊近况]\nTester: 今天在玩游戏"
+    memories = [{"content": "喜欢研究游戏机制。" * 70, "metadata": {}}]
+
+    with patch(
+        "astrbot_plugin_livingmemory.core.event_handler_modules.memory_recall.logger"
+    ) as logger:
+        handler._memory_recall._inject_clean_context(event, req, memories, dialogue)
+
+    assert len(req.extra_user_content_parts) == 1
+    part = req.extra_user_content_parts[0]
+    assert part._no_save is True
+    assert dialogue in part.text
+    assert memories[0]["content"] in part.text
+    assert "【证据边界与回答准则】" in part.text
+    logger.info.assert_called_once_with(
+        f"[{event.unified_msg_origin}] 本轮记忆注入就绪 ({len(part.text)} 字符):\n{part.text}"
+    )
+    logger.debug.assert_not_called()
+
+
+def test_clean_context_logs_when_nothing_is_injected(handler):
+    event = _make_event(group=True)
+    event.get_extra = Mock(return_value=None)
+    req = _make_req()
+    handler._memory_recall._get_dialogue_context = Mock(return_value="")
+
+    with patch(
+        "astrbot_plugin_livingmemory.core.event_handler_modules.memory_recall.logger"
+    ) as logger:
+        handler._memory_recall._inject_clean_context(event, req, [])
+
+    handler._memory_recall._get_dialogue_context.assert_called_once_with(event)
+    assert req.extra_user_content_parts == []
+    logger.info.assert_not_called()
+    logger.debug.assert_called_once_with(
+        f"[{event.unified_msg_origin}] 本轮未注入记忆内容"
+    )
+
+
 # ==================== fake_tool_call 兼容清理测试 ====================
 
 

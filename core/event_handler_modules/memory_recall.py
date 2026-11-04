@@ -363,6 +363,11 @@ class MemoryRecall:
             # Ownership is private runtime metadata, never added to the model text.
             part.__dict__["_livingmemory_clean_context"] = True
             req.extra_user_content_parts.append(part)
+            logger.info(
+                f"[{event.unified_msg_origin}] 本轮记忆注入就绪 ({len(text)} 字符):\n{text}"
+            )
+        else:
+            logger.debug(f"[{event.unified_msg_origin}] 本轮未注入记忆内容")
 
     @staticmethod
     def _remove_clean_context_parts(req):
