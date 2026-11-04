@@ -1,186 +1,180 @@
-# LivingMemory 生产定制版 (astrbot_plugin_livingmemory)
-
-面向 AstrBot 平台的长期记忆生命周期管理与原始聊天记录受控检索插件。基于社区原版深度定制，专为高频 QQ 群聊生产环境设计，在保留自动事实提炼与关系图谱的基础上，引入了**零主模型唤醒的被动捕获机制**与**面向原始消息的轻量采样检索工具集（overview / style_sample）**。
-
----
+# LivingMemory 生产定制版 v2.9.0
 
 ## 1. 项目名称与定位
 
-- **插件标识**：`astrbot_plugin_livingmemory`
-- **显示名称**：LivingMemory（生产定制轻量版）
-- **定位**：解决 AstrBot 在真实群聊交互中“长期记忆空洞”、“日报周报抄袭竞品群报”、“跨午夜时间漂移”、“模仿群友说话断章取义”以及“监听群聊导致高频唤醒主模型产生额外 Token 消耗”等核心痛点的高性能记忆插件。
+**LivingMemory（`astrbot_plugin_livingmemory`）** 是面向 AstrBot 高频群聊的统一上下文与记忆引擎：基于上游 2.9.0，整合旁听滑窗、群友立体人物档案（LivingDossier）、客观长期记忆、真实聊天流水检索与即时控制台观测，承担替代 ChatPlus 与 Self Learning 的统一能力。
 
----
+旁听消息先进入按群隔离的进程内滑窗，模型被唤醒时读取近况；需要回查细节时，再按需调用工具读取原文。滑窗本身没有数据库或模型 I/O，采用微秒级内存路径的设计，实际耗时以运行环境实测为准。后台记忆提炼、人物档案抽取仍会调用配置的记忆模型。
 
-## 2. 上游来源与血统
+本文描述源码架构与配置，版本以 [metadata.yaml](metadata.yaml) 为准。生产状态以主项目 [任务记录](../../../docs/tasks.md) 为准：2026-11-04 记录已完成 2.9.0 上线及 ChatPlus 过渡；Self Learning 的停用仍列为待办，不能由替代能力推断其已停用。
 
-- **官方上游**：[lxfight/astrbot_plugin_livingmemory](https://github.com/lxfight-s-Astrbot-Plugins/astrbot_plugin_livingmemory)（开源许可协议：AGPL-3.0），作者 lxfight。
-- **当前元数据版本**：`2.7.0-beta.2`（补齐自生产容器镜像基线）。
-- **生产定制基线**：
-  - 稳定基线基于上游 Commit `8985ae6`；
-  - 于 2026-10-23 增量合并上线了轻量检索模块 Commit `e69ee96f422e480f948093ec87bff64abee1f529`。
+## 2. 上游来源与演进血统
 
----
+- **官方上游**：lxfight 的 [astrbot_plugin_livingmemory](https://github.com/lxfight-s-Astrbot-Plugins/astrbot_plugin_livingmemory)，沿用 **AGPL-3.0**，见 [LICENSE](LICENSE)。
+- **当前基线**：上游 **2.9.0**。基线移植保留生产定制能力，完成 13 处核心冲突合并，兼容事务所有权与 `adapter_id` 隔离；引入原文档案、分层采样、事件提取及外部插件发送后归档 API。
+- **当前生产分支**：`feat/unified-context-memory`。元数据版本保持 `2.9.0`，并不意味着代码等同于上游同版本；复现或回退还须记录分支、提交及包哈希。
+- **主要演进**：`5a6f8c0`（2.9.0 移植）、`0bc65a1`（旁听与纯净注入）、`9fda089` / `cd8d02d`（记忆门禁与治理）、`3b6cc64` / `ecff415`（原文检索）、`3a50325` / `e6ef42f`（档案与乱序保护）。详细任务与来源分别维护于主项目 [tasks.md](../../../docs/tasks.md) 与 [sources.md](../../../docs/sources.md)。
+
+生产线采用轻量注入和工具检索，不引入研究分支 `81d5fd4` 的重型分面导航。研究源码、上游参考与生产源码分别维护。
 
 ## 3. 为什么做深度定制
 
-上游原版 LivingMemory 重点偏向于单人长周期伴随与通用事实沉淀，但在高活跃群聊场景中暴露了明显的工程与业务缺陷：
+| 真实痛点 | 工程决策与结果 |
+| --- | --- |
+| 旧记忆混入闲聊、Bot 认错与无长期价值片段，回答时生搬硬套 | 删除截取 200 字原文强行入库的兜底；事件摘要接受空事件，拒绝 `quality=low`。以 `processed_no_memory` 表示正常处理但不生成记忆，推进处理游标并跳过 documents、atoms、图谱及向量写入。历史数据用审计脚本可逆软隔离，含正事的 `mixed_content` 不自动隔离。 |
+| 群友身份不稳定，多人描述相互串用，旧别名纠正后又复活 | 在 `conversations.db` 中新增 `user_profiles` 单表，以 `(scope_id, user_id)` 主键隔离；硬事实绑定目标本人原文，身份更正单独验证目标。单值槽覆盖、集合槽增删，删除保留有界墓碑时间戳，阻止旧批次复活已删除事实或别名。 |
+| 提示词充斥免责套话，记忆片段反复污染历史 | 用 `DialogueBuffer` 提供自然近况，`CleanContextInjector` 组合口语化片段；`TextPart.mark_as_temp()` 只附加当前请求，保存历史时过滤，同时清理旧版注入残留。 |
+| 把刚才的玩笑夸大成“一贯如此”，把讨论计划说成已发生事实 | 标题改为 `[长期记忆与历史事件]`，附加三条证据边界；事件带来源时间、发言者与类型，长期印象只能依据档案及历史证据。 |
+| 历史细节无法查证，只能依赖模糊摘要 | 默认开启原文归档，通过 `query_chat_events` 按关键词、时间和人物查询。此次生产架构背景包含约 4.3 万条聊天流水的检索接入；这是历史数据规模说明，不是随包数据或实时条数承诺。 |
+| 注入过程黑盒化，无法判断模型当轮看到了什么 | `_inject_clean_context` 在 INFO 级记录会话、字符数及完整本轮注入正文；空注入仅记 DEBUG，可直接检查近况、档案和历史证据的实际组合。 |
 
-1. **群聊总结抄袭别家 Bot**：当群里有其他机器人定时发送“今日群报”或总结时，若单纯依靠关键词召回，主模型极易把别人发出的总结当作唯一事实甚至整篇抄袭，忽略了真实的群友聊天过程。
-2. **跨午夜时间概念混乱**：深夜或凌晨提问（如 00:30 提问“今天聊了什么”）时，常规大模型常把“今天”理解为自然日的前一天；旧系统未对北京时间半闭半开区间进行严密锚定，造成检索范围漂移。
-3. **首屏全看凌晨水群**：原始记录若直接按时间升序分页读取，第一页几乎全被凌晨 0点～6点 的零散闲聊占满，真正白天的活跃话题被全部挤出上下文窗口。
-4. **群友风格模仿片面孤立**：模仿某个群友说话时，原版只能靠几句模糊记忆或孤立梗句，缺乏该用户在一定时间跨度内、排除表情包与命令词后的纯文本（Plain 组件）语料样本。
-5. **被动归档的高昂唤醒代价**：若为了记录聊天而在 AstrBot 中给所有群消息挂钩子，常规插件会频繁唤醒主大模型执行 Filter 校验，造成巨大的 Token 浪费和交互卡顿。
-6. **拒绝 `81d5fd4` 重型分面导航的权衡决策**：上游后续分支尝试引入重型分面索引（Faceted Indexing）和全局人物目录。经我们在生产前期的综合评估，重型索引不仅显著增加消息写入时的 SQLite 锁争用和延迟，而且在群聊实际场景中未带来召回质量的实质改善。因此，我们决定**坚决拒绝引入重型导航分支，保持轻量采样检索架构**。
+三条证据边界的含义是：评价长期特征要依据档案与长期历史；近况只能描述为“刚才／今天说过”，不能扩张成“每天／总是”；长期依据不足时自然说明范围，只谈当前观察，不编造往事。当前代码在存在群聊近况时附加这组准则。
 
----
+## 4. 核心功能与架构分工
 
-## 4. 核心功能与指令/工具一览
-
-### 4.1 管理指令
+### 4.1 第一层：轻量注入
 
 ```text
-/lmem status        # 查看当前长期记忆库容量、图谱节点数、会话统计与存储状态
-/lmem summarize     # 手动触发当前会话未处理消息的长期记忆提炼与归档
-/lmem search <词>   # 测试关键词与向量混合检索召回效果
+群消息 → 权限与会话开关校验 → 旁听内存滑窗 / 原文归档队列
+                                       ↓
+模型唤醒 → 当前群近况 + 当前说话人档案 + 自动召回长期记忆
+                                       ↓
+                    CleanContextInjector → 当前请求临时片段
 ```
 
-### 4.2 大模型专属 Function Call 工具
+推荐采用以下轻量档；其中配置数量与代码硬预算应分别理解：
 
-插件向 AstrBot 注册了原生函数工具，其中 `query_chat_events` 是本次深度定制的核心模型入口：
+| 注入内容 | 推荐规模与实际边界 |
+| --- | --- |
+| `[群聊近况]` | 推荐 `dialogue_buffer.max_messages=30`，即最多 30 条；源码默认 **50**，允许 **10–100** 条，按会话 FIFO 保存、LRU 淘汰，排除当前消息避免重复。单条捕获文本最多 2000 字符，重启后滑窗清空。 |
+| `[说话人档案: …]` | 只读取当前说话人 **1 人**。硬事实与首选称呼、真名、别名合计最多 **12 项**，值文本合计最多 **200 字符**；标题、标签和分隔符不计入该预算。 |
+| `[长期记忆与历史事件]` | 默认 `recall_engine.top_k=5`，即最多 **5 篇**候选；数量可配置。格式器每篇最多 **800 字符**，历史条目共享 **6000 字符**预算，包含条目前缀与换行预算；这不是整个请求的总字符上限。 |
+| 当前称呼更正与说话人 | 本轮有明确更正时附加 `[本轮称呼更正]`，优先自然改口；有内容时附加当前说话人。 |
+| 证据边界 | 有近况时附加三条准则，区分当堂观察与长期事实。 |
 
-#### 核心增量工具：`query_chat_events`
-专门用于查询当前会话的原始历史聊天记录。工具支持 5 种精细操作模式：
+`DialogueBuffer` 不执行 LLM 请求；被动捕获钩子不主动唤醒主聊天模型。已有唤醒规则、其他插件和后台提炼仍有各自的运行路径。档案后台提取不阻塞当轮回复，新结果供后续轮次读取。
 
-| 模式 (`mode`) | 适用场景 | 核心机制 |
-| :--- | :--- | :--- |
-| **`overview`** | 时段群聊概览（日报/周报/回顾） | **未知话题先取样**。将时间窗分成 8 层，按消息序号分层均匀取样，返回密度分布；不按作者过滤。 |
-| **`style_sample`** | 拟人/模仿具体群友说话方式 | **抽取本人真实纯文本发言**。自动剔除表情、图片、机器人命令；引用单独隔离；跨时间桶均匀取样。 |
-| **`lookup`** | 查询已知明确话题 | 结合 `keywords` 和指定人物进行针对性命中，不做全群扫库。 |
-| **`time_read`** | 围绕采样点补读上下文 | 在 `overview` 发现线索后，针对指定起止时间窗口补读完整的连续对话。 |
-| **`read`** | 展开长消息原文 | 配合 `evidence_handle` 展开被截断的长文本消息。 |
+### 4.2 第二层：工具按需深翻
 
-- **关键参数说明**：
-  - `query`：用户原始问题（如“今天我没发言时聊了什么”、“总结最近一周的话题”）。
-  - `time_range`：支持“今天”、“昨天”、“昨晚”（固定为昨日18:00至今日06:00）、“最近7天”等自然表述。
-  - `person`：支持具体 QQ/昵称；传入 `我` 自动绑定当前提问者，传入 `你` 自动绑定机器人自身。
+`query_chat_events` 只在调用时检索当前会话原文，不把整库直接注入提示词。工具有权限检查、`adapter_id` 隔离和覆盖／缺口信息；没有归档或查询不可用时应说明证据不足。
 
-#### 基础记忆工具：
-- `recall_long_term_memory`：检索长期知识库与实体关系图谱。
-- `memorize_long_term_memory`：当对话中出现关键偏好、约定或重要事实时，主动写入长期记忆库。
+| `mode` | 使用场景 | 机制与边界 |
+| --- | --- | --- |
+| `overview` | 日报、周报、补看错过的讨论，尚不清楚话题 | 先按时间窗分层抽取讨论片段并返回密度；人物参数用于活动时间线，不按作者过滤。样本不是完整统计。 |
+| `style_sample` | 模仿某位群友、替其拟回复 | 按人物取本人原生 Plain 文本，引用另列，过滤命令与非文本，跨时间取样并去重。 |
+| `lookup` | 已知话题的精准核对 | 组合关键词、时段与可选人物，不用猜测关键词替代开放式概览。 |
+| `time_read` | 发现线索后顺着某段讨论补读 | 按明确时间窗读取连续对话，可指定作者；利用返回游标继续读。 |
+| `read` | 展开被截断的长消息 | 使用返回的 `evidence_handle`，必要时继续 `next_text_handle`。 |
 
----
+参数示例（模型工具参数，不是聊天命令）：
 
-## 5. 关键算法与架构机制
-
-### 5.1 被动群聊捕获机制（`PassiveGroupCaptureFilter`）
-
-为了在群聊中完整保存上下文以供后续检索，同时**坚决不唤醒主模型**，定制了专用的自定义过滤器：
-
-```python
-# 核心架构（摘自 core/passive_group_capture.py 与 main.py）
-@filter.custom_filter(PassiveGroupCaptureFilter, False)
-async def handle_all_group_messages(self, event: AstrMessageEvent):
-    """[Passive Filter Hook] Capture group messages without waking AstrBot."""
-    return
+```json
+{"query":"昨天我说过哪些关于备份的话？","mode":"lookup","keywords":["备份"],"time_range":"昨天","person":"我","person_role":"speaker"}
 ```
 
-- **始终返回 False**：`PassiveGroupCaptureFilter` 挂载在群消息前置过滤阶段。它在内部异步触发消息排队入库任务，但自身**始终向 AstrBot 返回 `False`**。
-- **管线静默阻断**：由于返回了 `False`，AstrBot 认定该消息未命中唤醒条件，直接终止消息管线，不再调用任何 LLM 提示词生成与网络调用。
-- **边界防御**：捕获时同步校验全局平台白名单（`enable_id_white_list`）与会话级插件开关，被禁用的会话不进行任何捕获。
+- `query` 保留用户原始问题；问某人“说过什么”须用 `person_role=speaker`，默认 `about` 指被讨论者。
+- `person=我` 绑定当前提问者，`person=你` 绑定机器人；无法唯一解析的昵称只能当线索，不能当身份确认。
+- 时间锚定 `Asia/Shanghai`：今天为当前自然日；昨晚为昨日 18:00 至今日 06:00（不超过当前时刻）；刚才／刚刚为最近 30 分钟。
+- `start`、`end` 是带时区的 ISO 8601 起止点，左闭右开，成对填写，不能与 `time_range` 同传。后续分页使用原返回 `cursor`。
+- 不发言区间不能证明离线或未读；机器人既往猜测、引用与关系线索也不能直接证明事实。证据足够即可停止检索。
 
-### 5.2 时段分层采样算法（`overview`，`archive_sampling.py`）
+其他基础工具包括 `recall_long_term_memory`（检索压缩长期记忆及关系线索）、`memorize_long_term_memory`（主动记录重要事实）。具体工具注册受功能开关和运行状态约束，原文核对与长期记忆召回各有用途。
 
-为了解决“概览只看凌晨”和“密集刷屏掩盖正常讨论”的问题：
+### 4.3 管理入口（需要管理员权限）
 
-1. **8 等分时间层（Strata）**：将给定的时间范围（如今日、最近7天）在时间轴上均匀划分为 8 个桶（`bucket`）。
-2. **消息序号空间分区（Ordinal Quantiles）**：
-   - 先对每个非空层分配最多 5 条的种子候选片段；
-   - 剩余正文预算按消息密度分配最多 3 条的补充片段；
-   - 在每个层内，按照消息序号（Ordinal）而非单纯物理时间进行分段取样，彻底消除某一时间段几百条短消息爆发（Burst）导致的采样遮蔽。
-3. **活动时间线探测**：当指定 `person=我` 时，计算该用户在整个时间窗内的发言边界，返回“无发言区间”，辅助大模型精准回答“我不在的时候发生了什么”。
+```text
+/lmem status        # 当前记忆与会话状态
+/lmem summarize     # 管理员手动触发当前会话提炼
+/lmem search <词>   # 检查记忆检索效果
+```
 
-### 5.3 人物语言风格采样算法（`style_sample`，`archive_sampling.py`）
+控制台出现“本轮记忆注入就绪”时可查看完整临时片段。日志证明当轮组织的上下文，不等于回答已正确使用全部证据。
 
-为了让大模型真实学到群友的说话口吻：
+## 5. 关键算法与核心代码模块索引
 
-1. **纯正文抽取与清洗**：仅保留由用户亲自提交的原生 `Plain` 文本，过滤所有图片、表情、文件，并滤除形如 `/`、`!`、`#` 开头的命令类输入。
-2. **引用隔离**：将回复和引用内容剥离至 `quoted_context`，确保 `text` 字段 100% 属于本人用词。
-3. **两端覆盖 + 二分取样**：在时间桶内先取首尾两端，再二分深入中间样本；同一 10 分钟最多选 2 条，去除完全重复文本，单次抽取上限为 32 条。
+| 模块 | 职责 |
+| --- | --- |
+| [core/dialogue_buffer.py](core/dialogue_buffer.py) | 有界进程内滑窗、消息 ID 去重、当前消息排除、分钟时间标记、会话 LRU。 |
+| [core/user_profile.py](core/user_profile.py) | 硬事实与身份操作归并、原文引句核验、单值／集合槽、事实预算、墓碑与称呼格式化。 |
+| [core/user_profile_runtime.py](core/user_profile_runtime.py) / [storage/user_profile_store.py](storage/user_profile_store.py) | 后台有界队列、增量水位、目标身份绑定、短事务写入、`revision` 乐观锁、归档 epoch 防旧任务写回。 |
+| [core/clean_context.py](core/clean_context.py) | 自然语言上下文组合、长期条目字符预算、称呼更正与证据边界。 |
+| [core/event_handler_modules/memory_recall.py](core/event_handler_modules/memory_recall.py) | 唤醒时召回与注入、档案有效性检查、临时片段去重与清理、INFO 正文日志。 |
+| [core/tools/chat_events_tool.py](core/tools/chat_events_tool.py) | `query_chat_events` 五模式入口、参数契约、当前用户绑定、授权及超时处理。 |
+| [core/managers/archive_sampling.py](core/managers/archive_sampling.py) | 时段概览与风格采样：8 层时间桶、桶内消息序号取样；风格样本隔离引用、限制短时密集样本、去重。 |
+| [core/processors/memory_processor.py](core/processors/memory_processor.py) | 读取当前摘要提示词，事件规范化、长期价值与质量门禁、`processed_no_memory` 契约。 |
+| [core/processors/memory_processor_build.py](core/processors/memory_processor_build.py) | 构建客观摘要与原子记忆，删除原文兜底；低质量或正常空记忆不生成 atoms。 |
+| [scripts/audit_dirty_memories.py](scripts/audit_dirty_memories.py) | 历史脏记忆扫描、混合内容保护、可逆软隔离与精确回滚；须在备份及范围核对后使用。 |
 
-### 5.4 群友人物档案（LivingDossier）
+LivingDossier 硬事实只接受目标本人有来源支持的自述。称呼／身份更正允许另行绑定目标；邻近上下文可辅助理解指代，但不能冒充本人硬事实证据。默认同一群友最短更新间隔 300 秒，到期后下一条有效消息触发一批最多 40 条归档。失败不推进提取水位，清除群归档时级联清除档案并阻断此前在途任务。
 
-显式开启 `user_profiles.enabled` 后，归档中的有效第一人称自述会触发独立后台抽取。自身账号与 `user_profiles.bot_ids` 中的机器人、非数字身份、私聊、表情、命令和无有效自述的口水不触发。每个群友默认至少间隔300秒更新一次，到期后下一条有效自述触发最多40条增量归档；积压逐批处理，未成功的模型调用不推进水位。开启前请填写已知群管 Bot 账号。
+`user_profiles` 不继承长期记忆全局共享规则。单值如 `current_main_game`、`device_env` 按原消息时间覆盖；集合如 `hobbies`、`key_milestones` 支持 `add` / `remove`。身份支持首选称呼、真名、别名及明确纠错；语义歧义仍需自然确认，不能把模型判断当作身份权威。
 
-`conversations.db` 只新增 `user_profiles` 一张表，以 `(scope_id, user_id)` 为主键，不继承长期记忆的全局共享设置。`current_main_game`、`device_env` 为单值槽位，最新原消息时间覆盖；`hobbies`、`key_milestones` 为集合槽位，支持追加、去重和明确否定后的移除。最多保留12条、合计200字的事实，每条记录原始消息UID和时间戳。模型只看到目标用户的原生 Plain 自述，不接触其他人的发言和回复引用；写入前再次验证归属、群、水位、原文引句及值的原文支持。心理、性格猜测不进入持久档案；抽取的语义判断仍依赖模型，遇到歧义应返回空结果。
+## 6. 配置指南
 
-抽取在数据库事务外执行，写入以 `revision` 乐观锁保护，冲突留待下一次触发重新读取。清除群归档时一并删除该群档案，清除前的在途提取不能写回。后台队列有界、单消费者，失败只记录异常类型，不记录私密原文。插件关闭时取消后台抽取。
+配置通过 AstrBot 插件配置页管理，完整字段见 [_conf_schema.json](_conf_schema.json)。以下为源码默认值；已有生产配置不会因 README 推荐值自动改变。
 
-每次模型唤醒读取当前说话人的档案，与群聊近况、长期记忆统一临时注入，例如 `[说话人档案: 张三]` 与 `- 喜好/偏好: Linux, OpenWrt`；后台新结果供后续轮次使用，不等待抽取完成。配置关闭、私聊、权限不通过或没有事实时不注入。数据仍属私密业务库，不进入Git。
+| 配置键 | 默认值 | 配置说明 |
+| --- | --- | --- |
+| `dialogue_buffer.enabled` | `true` | 开启旁听近况。 |
+| `dialogue_buffer.max_messages` | `50` | 保留及注入 10–100 条；轻量档建议 `30`。 |
+| `user_profiles.enabled` | `false` | 档案需显式开启，并同时开启原文归档；会产生后台记忆模型调用。 |
+| `user_profiles.bot_ids` | 空文本 | 填已知群管等机器人账号，空格、逗号或换行分隔；自身账号始终排除。 |
+| `user_profiles.update_interval_seconds` | `300` | 每个群友最短更新间隔，`0` 表示不限制。 |
+| `archive.enabled` | `true` | 默认保存原文；允许显式关闭，影响后续捕获与档案功能。 |
+| `archive.query_enabled` | `true` | 向模型开放原文检索工具。 |
+| `archive.capture_mode` | `inherit` | 继承全量捕获开关；另有 `off`、`permitted_all`，仍须通过访问检查。 |
+| `archive.result_chars` | `24000` | 单次工具结果原文字符上限。 |
+| `archive.max_candidates` | `400` | 话题检索候选上限。 |
+| `archive.capture_queue_size` | `512` | 原文捕获队列容量。 |
+| `session_manager.enable_full_group_capture` | `true` | 捕获非唤醒群消息，配合归档模式使用。 |
+| `recall_engine.top_k` | `5` | 自动召回数量，允许 0–50；`0` 跳过自动长期召回，近况和档案有各自开关。 |
+| `recall_engine.max_k` | `10` | 主动长期检索单次数量上限。 |
+| `recall_engine.injection_method` | `extra_user_content` | 唯一支持的临时注入方式；旧方式自动回退。 |
+| `recall_engine.auto_remove_injected` | `true` | 清除旧注入方式残留。 |
+| `provider_settings.embedding_provider_id` | 空文本 | 建议显式选择已启用的 Embedding Provider，避免回退时选错模型或初始化失败。 |
+| `provider_settings.llm_provider_id` | 空文本 | 后台总结与档案抽取模型；空值使用 AstrBot 默认。 |
+| `access_control.whitelist_enabled` | `false` | 开启后仅允许白名单；名单为空时拒绝记忆操作。 |
 
----
+推荐组合为：近况 30 条、自动召回 5 篇、按需原文检索、显式启用档案并排除其他 Bot。模型、权限和归档准备就绪后再启用后台档案抽取。
 
-## 6. 配置全景指南
+原文归档和人物档案位于插件私有数据目录的 `conversations.db`；长期记忆、图谱与向量索引由插件数据目录管理。部署路径以 AstrBot 实际解析结果为准。归档、摘要及索引均属于业务私密数据，不能打进源码包或提交到 Git。
 
-### 6.1 核心配置项
+## 7. 本地开发与测试命令
 
-| 配置键 | 类型 | 说明 |
-| :--- | :--- | :--- |
-| `archive.query_enabled` | `bool` | 是否向大模型开放 `query_chat_events` 原始记录检索工具 |
-| `embedding_provider` | `str` | 向量化模型提供方（为空则继承 AstrBot 全局默认） |
-| `llm_provider` | `str` | 记忆总结与关系提炼的 LLM 提供方 |
-| `rrf_k` | `int` | 混合检索倒数排序融合（RRF）常数（推荐 60） |
-| `decay_rate` | `float` | 长期记忆随时间衰减系数（推荐 0.01） |
+建议使用 Python **3.12+** 的独立虚拟环境，并与目标 AstrBot API 保持兼容。运行时依赖见 [requirements.txt](requirements.txt)；测试需要 `pytest`、`pytest-asyncio` 及真实 `aiosqlite`，不能用缺失依赖时的测试桩代替数据库验证。
 
-### 6.2 私有数据存储
-
-- **数据根目录**：`data/plugins/astrbot_plugin_livingmemory/`
-  - `conversations.db`：原始群聊消息与对话序列归档库（SQLite，由被动过滤器维护）。
-  - `livingmemory.db`：长期记忆实体、语义文档与关联图谱库。
-  - `vec_db/`：基于 FAISS 的向量索引文件。
-- **数据安全**：包含真实群友历史发言，严禁纳入公共 Git 提交；定期通过 AstrBot 备份机制备份 SQLite 文件。
-
----
-
-## 7. 本地开发与测试
-
-### 7.1 开发依赖
-
-- Python `>= 3.10`
-- `aiosqlite`（异步 SQLite 支持，被动捕获与存储核心依赖）
-- `jieba`（中文分词）
-- `pytest`、`pytest-asyncio`
-
-### 7.2 运行回归测试
-
-在 `workspaces/plugins/livingmemory-production` 目录下执行定制模块测试：
+在本插件目录执行：
 
 ```powershell
-python -B -m pytest tests/test_archive_sampling.py tests/test_chat_events_tool.py tests/test_time_scoped_events.py tests/test_conversation_store.py tests/test_group_capture_filter.py tests/test_memory_scope.py -q
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt pytest pytest-asyncio
+
+# 旁听、临时注入与人物档案
+python -B -m pytest tests/test_dialogue_buffer.py tests/test_event_handler_injection.py tests/test_user_profile.py tests/test_user_profile_identity.py -q
+
+# 原文工具、采样、时间与权限隔离
+python -B -m pytest tests/test_chat_events_tool.py tests/test_archive_sampling.py tests/test_time_scoped_events.py tests/test_conversation_store.py tests/test_group_capture_filter.py tests/test_memory_scope.py -q
+
+# 记忆准入与处理回归
+python -B -m pytest tests/test_memory_admission.py tests/test_memory_processor.py tests/test_memory_processor_regressions.py -q
 ```
 
-- **运行前提示**：测试套件依赖本地真实安装的 `aiosqlite` 库。若在未安装完整依赖的纯净开发环境中执行，测试桩将无法代理真实的异步连接方法；请在配置好依赖的虚拟环境或容器镜像中运行全量测试。
+需要全面回归时执行 `python -B -m pytest tests -q`；具体依赖还须与测试环境及宿主版本对齐。以上为可执行入口，不代表本轮已运行通过，也不将历史测试数量写作当前验收结果。涉及真实样本的验证仅使用经授权的隔离数据，不保存原始私密日志。
 
----
+## 8. 部署与安全约定
 
-## 8. 打包与发布指引
-
-统一使用项目根目录运维脚本进行制品构建与发布：
-
-### 8.1 打包插件 ZIP
-
-在 `bot_shushu` 项目根目录执行：
+部署统一遵循主项目 [维护流程](../../../docs/maintenance.md)：本地修改与核验后生成标准 ZIP，再交由 AstrBot 原生安装／同名更新接口管理生命周期。以下在 `bot_shushu` 根目录执行，仅示例本地打包：
 
 ```powershell
-python scripts/astrbot_plugin_package.py livingmemory-production --output dist/astrbot_plugin_livingmemory.zip
+python -B scripts/astrbot_plugin_package.py livingmemory-production --output deploy/packages/livingmemory-2.9.0-release
 ```
-该命令会自动依据元数据规则将插件源码打包为符合规范的标准 ZIP 压缩包。
 
-### 8.2 原生 HTTP 发布与更新
+`--output` 为制品目录，不能把 ZIP 文件名当目录参数。安装时使用该目录实际生成的 ZIP，并按维护流程核对插件标识 `astrbot_plugin_livingmemory`、版本 `2.9.0`、激活／加载与失败状态。具体接口参数、凭据读取和回退流程只在维护文档维护。
 
-通过标准 HTTP 接口上传更新至正在运行的 AstrBot 实例：
-
-```powershell
-python scripts/astrbot_plugin_http.py --base-url http://192.168.1.100:6185 --profile dashboard update dist/astrbot_plugin_livingmemory.zip
-```
-- 发布完成后，AstrBot 将自动完成重载并加载新版记忆捕获与检索模块。
+- 发布前核对现场基线、定制提交、变更范围、备份和回退包，发现差异先处理；同版本不同提交不能仅凭版本号判定一致。
+- 禁止 SSH 逐文件读改或上传源码，禁止随包安装器、shell、runner 或自制生命周期；上传不额外 reload，不先卸载删数据，不忽略版本要求，写请求超时不盲目重传。
+- 代码回退不得用旧数据库覆盖新增业务数据；schema 或依赖变化单独评估。备份应包含一致的数据库与相应索引，不能直接复制活动库文件冒充一致快照。
+- 源码与发布包不得含真实密钥、QQ 登录态、群聊数据库、个人私密信息或原始私密日志。INFO 注入正文日志本身可能含群聊与档案内容，按私密业务数据控制访问和留存，不把它附入公共问题或提交。
+- 设备操作前读取 `Local_network` 对应文档并确认 SSH MCP profile；6100u 为应用主机，w6100u 为网关。生产容器 `astrbot` 未经确认不得停止或修改配置，严禁向真实 QQ 发送测试消息。
+- 隔离设备测试仅使用专用 `astrbot-livingmemory-test` 容器，不接入真实 QQ，测试后及时清理并停止。本地文档或磁盘版本更新不代表生产业务验收完成。
