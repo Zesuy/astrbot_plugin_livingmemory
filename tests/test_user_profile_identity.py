@@ -131,3 +131,16 @@ async def test_correction_injected_as_temporary_context_without_waiting_for_extr
     part = request.extra_user_content_parts[0]
     assert "本轮称呼更正" in part.text and part._no_save
     assert (await store.get_user_profile("group:a", "100"))["revision"] == 0
+
+
+def test_identity_text_supports_daizhi_and_shizhi():
+    from astrbot_plugin_livingmemory.core.user_profile import identity_text
+    assert identity_text("以后用小路代指四格蝶") is True
+    assert identity_text("小路是指四格蝶") is True
+
+
+def test_correction_aliases_handles_zhideshi_without_greed():
+    from astrbot_plugin_livingmemory.core.user_profile import correction_aliases
+    assert correction_aliases("不对，小路指的是幽默老蜀，不是四格蝶！") == {"小路": "幽默老蜀"}
+    assert correction_aliases("不对，x是指老王") == {"x": "老王"}
+    assert correction_aliases("小路不是四格蝶，是幽默老蜀") == {"小路": "幽默老蜀"}

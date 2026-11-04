@@ -8,7 +8,7 @@ SET_SLOTS = {"hobbies": "喜好/偏好", "key_milestones": "关键经历"}
 FIRST_PERSON = re.compile(r"我|咱|本人|\bI\b|\bmy\b", re.I)
 NEGATION = re.compile(r"不再|不喜欢|不爱|没兴趣|放弃|退坑|不用|停止|no longer|don't|do not|quit", re.I)
 IDENTITY_ACTIONS = {"set_preferred_name", "set_real_name", "add_alias", "remove_alias", "reassign_alias"}
-IDENTITY_INTENT = re.compile(r"真名|叫我|别叫|不要叫|外号|别名|简称|指的是|就是|不是.+是|是.+不是|不对.+是|@")
+IDENTITY_INTENT = re.compile(r"真名|叫我|别叫|不要叫|外号|别名|代指|简称|指的是|是指|就是|不是.+是|是.+不是|不对.+是|@")
 
 
 def identity_text(text):
@@ -220,9 +220,12 @@ async def resolve_member(scope_id, token, store, *, include_archive=True):
 
 def correction_aliases(text):
     """Small request-local grammar; unresolved corrections remain user assertions."""
-    name = r"([A-Za-z0-9_\u4e00-\u9fff]{1,20})"
-    patterns = [r"(?:不对|搞错了|纠正一下)[，,：:\s]*" + name + r"\s*(?:指的是|就是|是)\s*" + name,
-                name + r"\s*不是\s*[A-Za-z0-9_\u4e00-\u9fff]{1,20}[，,\s]+是\s*" + name]
+    name = r"([A-Za-z0-9_\u4e00-\u9fff]+?)"
+    name_target = r"([A-Za-z0-9_\u4e00-\u9fff]{1,20})"
+    patterns = [
+        r"(?:不对|搞错了|纠正一下)[，,：:\s]*" + name + r"\s*(?:是指|指的是|代指|就是|是)\s*" + name_target,
+        name + r"\s*(?:指的)?不是\s*[A-Za-z0-9_\u4e00-\u9fff]+?[，,\s]+(?:而是|是)\s*" + name_target
+    ]
     for pattern in patterns:
         match = re.search(pattern, text)
         if match:
