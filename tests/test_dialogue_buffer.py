@@ -167,7 +167,7 @@ async def test_unified_temp_injection_and_repeat_hook_dedup(top_k, auto_remove):
     assert "[群聊近况]" in part.text
     assert "周六有雨" in part.text and "本轮触发消息" not in part.text
     assert "[本轮说话人]\n张三" in part.text
-    assert ("[长期记忆 / 群友印象]\n- 张三喜欢徒步" in part.text) == (top_k > 0)
+    assert ("[长期记忆与历史事件]\n- 张三喜欢徒步" in part.text) == (top_k > 0)
     assert "Importance" not in part.text and "CRITICAL" not in part.text
     assert req.prompt == "现在怎么安排？" and req.system_prompt == "persona"
     if top_k == 0:
@@ -218,7 +218,7 @@ def test_clean_context_preserves_live_atom_filtering_and_budget():
         ],
         speaker="Alice",
     )
-    assert text == "[长期记忆 / 群友印象]\n- live fact\n\n[本轮说话人]\nAlice"
+    assert text == "[长期记忆与历史事件]\n- live fact\n\n[本轮说话人]\nAlice"
     text = CleanContextInjector.format_context(memories=[{"content": "x" * 10000}] * 50)
     assert len(text) < 6100
 

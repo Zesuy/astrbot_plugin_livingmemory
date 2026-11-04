@@ -65,7 +65,7 @@ class RecallEngineConfig(BaseModel):
         description="召回记忆的最低向量相似度，0 表示不过滤",
     )
     recent_memory_count: int = Field(
-        default=2, ge=0, le=20, description="每次召回保留的近期记忆数量"
+        default=0, ge=0, le=20, description="每次召回保留的近期记忆数量"
     )
     recent_memory_max_age_hours: int = Field(
         default=72, ge=0, le=8760, description="近期记忆时间窗口，0 表示不限制"

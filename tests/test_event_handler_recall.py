@@ -46,7 +46,7 @@ async def test_handle_memory_recall_injects_extra_user_content(handler, memory_e
     memory_engine.search_memories.assert_awaited_once()
     assert len(req.extra_user_content_parts) == 1
     text_part = req.extra_user_content_parts[0]
-    assert "[长期记忆 / 群友印象]" in text_part.text
+    assert "[长期记忆与历史事件]" in text_part.text
     assert getattr(text_part, "_no_save", False) is True
     # system_prompt 不应被修改
     assert req.system_prompt == ""

@@ -227,7 +227,7 @@
                 "description": "近期记忆保留数量",
                 "hint": "在每次召回中为当前范围内的近期记忆保留槽位，避免只依赖向量相似度。设为 0 可关闭。",
                 "type": "int",
-                "default": 2,
+                "default": 0,
                 "slider": {
                     "min": 0,
                     "max": 20,

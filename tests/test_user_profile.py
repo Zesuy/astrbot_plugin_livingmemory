@@ -235,7 +235,7 @@ async def test_wakeup_injection_and_clear_before_format(store):
     recall._inject_clean_context(ev, req, [{"content": "周末约好爬山"}], "[群聊近况]\n在聊设备")
     text = req.extra_user_content_parts[0].text
     assert "[说话人档案: 张三]\n- 喜好/偏好: Linux" in text
-    assert "[群聊近况]" in text and "[长期记忆 / 群友印象]" in text
+    assert "[群聊近况]" in text and "[长期记忆与历史事件]" in text
     assert req.extra_user_content_parts[0]._no_save
     await store.clear_archive("group:a")
     req.extra_user_content_parts.clear()
