@@ -468,6 +468,12 @@ class MemoryRecall:
                     "next_cursor unchanged as cursor to continue long evidence. "
                     "For original-message pages, keep include_source=true."
                 )
+            if "query_chat_events" in names:
+                available.append(
+                    "- query_chat_events: query retained original chat messages by "
+                    "keywords + time_range + person (mode=lookup/overview/time_read). "
+                    "Use when asked about specific past quotes, dates, or chat history."
+                )
             policy_text = policy.replace("{available_tools}", "\n".join(available))
             wrapped = (
                 f"{AGENT_RECALL_POLICY_HEADER}\n"
