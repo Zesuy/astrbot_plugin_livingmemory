@@ -29,7 +29,7 @@ def eligible_text(text):
 
 
 def empty_profile():
-    return {"single_slots": {}, "set_slots": {}}
+    return {"single_slots": {}, "set_slots": {}, "removals": {}}
 
 
 def normalize_value(value):
@@ -41,6 +41,7 @@ def apply_operations(profile, operations, sources, user_id):
     result = copy.deepcopy(profile)
     single = result.setdefault("single_slots", {})
     sets = result.setdefault("set_slots", {})
+    removals = result.setdefault("removals", {})
     validated = []
     for op in operations[:30]:
         if not isinstance(op, dict):
@@ -75,12 +76,19 @@ def apply_operations(profile, operations, sources, user_id):
             if single.get(slot, {}).get("at", 0) <= fact["at"]:
                 single[slot] = fact
         else:
+            val_norm = normalize_value(fact["val"])
             items = sets.setdefault(slot, [])
-            same = [f for f in items if normalize_value(f["val"]) == normalize_value(fact["val"])]
+            same = [f for f in items if normalize_value(f["val"]) == val_norm]
             if same and max(f["at"] for f in same) > fact["at"]:
                 continue
-            items[:] = [f for f in items if normalize_value(f["val"]) != normalize_value(fact["val"])]
-            if action == "add":
+            if action == "remove":
+                removals[val_norm] = max(removals.get(val_norm, 0), fact["at"])
+                items[:] = [f for f in items if normalize_value(f["val"]) != val_norm]
+            elif action == "add":
+                if removals.get(val_norm, 0) >= fact["at"]:
+                    continue
+                removals.pop(val_norm, None)
+                items[:] = [f for f in items if normalize_value(f["val"]) != val_norm]
                 items.append(fact)
     # Keep the most recent 12 facts and at most 200 content characters.
     facts = [(v["at"], "single_slots", k, v) for k, v in single.items()]
@@ -95,6 +103,8 @@ def apply_operations(profile, operations, sources, user_id):
             bounded[section].setdefault(slot, []).append(fact)
         chars += len(fact["val"])
         count += 1
+    sorted_removals = sorted(removals.items(), key=lambda kv: kv[1], reverse=True)[:20]
+    bounded["removals"] = dict(sorted_removals)
     return bounded
 
 

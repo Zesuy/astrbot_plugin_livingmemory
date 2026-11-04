@@ -242,3 +242,30 @@ async def test_disabled_private_or_unauthorized_profile_is_not_read(store):
 
 def test_empty_profile_does_not_add_context():
     assert CleanContextInjector.format_context(profile=empty_profile(), speaker="张三") == ""
+
+
+@pytest.mark.asyncio
+async def test_cross_batch_out_of_order_removal_protection(store):
+    # Batch 1: User says "I like Linux" at at=1000
+    await source(store, uid="u1", text="我喜欢Linux", at=1000)
+    assert await commit(store, [op(uid="u1", val="Linux", quote="我喜欢Linux", action="add")])
+    p1 = await store.get_user_profile("group:a", "100")
+    assert any(f["val"] == "Linux" for f in p1["profile"]["set_slots"]["hobbies"])
+
+    # Batch 2: User says "I quit Linux" at at=3000
+    await source(store, uid="u2", text="我不再折腾Linux了", at=3000)
+    assert await commit(store, [op(uid="u2", val="Linux", quote="我不再折腾Linux了", action="remove")])
+    p2 = await store.get_user_profile("group:a", "100")
+    assert not any(f["val"] == "Linux" for f in p2["profile"]["set_slots"].get("hobbies", []))
+
+    # Batch 3 (Late-arriving older evidence at at=2000): should NOT resurrect Linux!
+    await source(store, uid="u3", text="我在用Linux工作", at=2000)
+    assert await commit(store, [op(uid="u3", val="Linux", quote="我在用Linux工作", action="add")])
+    p3 = await store.get_user_profile("group:a", "100")
+    assert not any(f["val"] == "Linux" for f in p3["profile"]["set_slots"].get("hobbies", []))
+
+    # Batch 4 (Newer evidence at at=4000): user resumes Linux -> should succeed!
+    await source(store, uid="u4", text="我又开始喜欢Linux了", at=4000)
+    assert await commit(store, [op(uid="u4", val="Linux", quote="我又开始喜欢Linux了", action="add")])
+    p4 = await store.get_user_profile("group:a", "100")
+    assert any(f["val"] == "Linux" for f in p4["profile"]["set_slots"]["hobbies"])
