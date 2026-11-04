@@ -25,7 +25,7 @@ _REACTION = re.compile(r"\[(?:表情|图片|动画表情|image|face|emoji)[^\]]*
 _BANTER = re.compile(r"(?<!\w)(?:哈哈+|呵呵+|[哈嘿嘻]{2,}|[6６]{2,})(?!\w)|笑死|绷不住|调侃|闲聊|刚醒又困|排行榜.{0,30}(?:争辩|争论|打脸)")
 _APOLOGY = re.compile(r"(?:Bot|机器人|助手|鼠鼠|我)(?:表示|承认|回复|说|随后|最终|再次|主动)*[：:,，\s]*(?:对不起|抱歉|道歉|认错|错了|搞错了|弄错了|理解错了)", re.I)
 # Preserve durable facts even when an event was assigned a generic noise kind.
-_DURABLE = re.compile(r"计划|决定|约定|备份|每周|发布|修复|喜欢|偏好|安排|截止|负责")
+_DURABLE = re.compile(r"计划|决定|约定|备份|每周|发布|修复|喜欢|偏好|安排|截止|负责|技术|原理|算法|代码|配置|定理|教程|规则|跑团|开发|编译|部署|考研|读博|求职|招聘")
 
 
 def event_kind_counts(metadata: dict) -> dict[str, int]:
