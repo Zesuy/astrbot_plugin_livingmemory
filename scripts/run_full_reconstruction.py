@@ -12,6 +12,7 @@ import contextvars
 from dataclasses import asdict
 from datetime import datetime, timezone, timedelta
 import hashlib
+import gzip
 import json
 import logging
 import os
@@ -129,7 +130,13 @@ async def reconstruct(args, source, dest):
     from pilot_plugin.storage.conversation_store import ConversationStore
     from pilot_plugin.core.user_profile_runtime import UserProfileRuntime, EXTRACTION_POLICY
 
-    selection = select_windows(source, args.scope, args.max_messages)
+    if source.suffix == ".gz":
+        with gzip.open(source, "rt", encoding="utf-8") as handle:
+            selection = json.load(handle)
+        if selection["max_messages"] != args.max_messages or (args.scope and selection["scope"] != args.scope):
+            raise ValueError("slice_options_mismatch")
+    else:
+        selection = select_windows(source, args.scope, args.max_messages)
     code_files = sorted([*ROOT.joinpath("core").rglob("*.py"), *ROOT.joinpath("core/prompts").glob("*.txt"),
                          *ROOT.joinpath("storage").rglob("*.py"), Path(__file__)])
     manifest = {"source_sha256": digest(source), "model": args.model,
