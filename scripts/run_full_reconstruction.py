@@ -74,11 +74,15 @@ class Provider:
         self.provider_config = {"id": "offline-full-replay"}
         self.semaphore = asyncio.Semaphore(concurrency)
         self.ledger = ledger
+        self.service_error = None
+        self.consecutive_http_errors = 0
         ledger.execute("CREATE TABLE IF NOT EXISTS calls(id INTEGER PRIMARY KEY,job TEXT,started REAL,seconds REAL,status TEXT,model TEXT,usage TEXT)")
         ledger.commit()
 
     async def text_chat(self, *, prompt, system_prompt):
         async with self.semaphore:
+            if self.service_error:
+                raise RuntimeError("cloud_suspended")
             started = time.time()
             cursor = self.ledger.execute("INSERT INTO calls(job,started,status) VALUES(?,?,?)", (JOB.get(), started, "inflight"))
             self.ledger.commit()
@@ -89,15 +93,20 @@ class Provider:
                     json={"model": self.model, "temperature": 0, "messages": [
                         {"role": "system", "content": system_prompt}, {"role": "user", "content": prompt}]})
                 if response.status_code != 200:
+                    self.consecutive_http_errors += 1
+                    if self.consecutive_http_errors >= 6:
+                        self.service_error = "consecutive_http_" + str(response.status_code)
                     raise RuntimeError("cloud_http_" + str(response.status_code))
+                self.consecutive_http_errors = 0
                 result = response.json()
                 self.ledger.execute("UPDATE calls SET seconds=?,status='received',model=?,usage=? WHERE id=?",
                     (time.time() - started, result.get("model"), json.dumps(result.get("usage")), call_id))
                 self.ledger.commit()
                 return types.SimpleNamespace(completion_text=result["choices"][0]["message"]["content"])
             except BaseException as exc:
+                safe_status = str(exc) if re.fullmatch(r"cloud_http_\d{3}", str(exc)) else type(exc).__name__
                 self.ledger.execute("UPDATE calls SET seconds=?,status=? WHERE id=? AND status='inflight'",
-                    (time.time() - started, type(exc).__name__, call_id))
+                    (time.time() - started, safe_status, call_id))
                 self.ledger.commit()
                 raise
 
@@ -185,7 +194,7 @@ async def reconstruct(args, source, dest):
 
         async def memory_worker():
             processor = MemoryProcessor(llm_provider=provider, config={"summary_mode": "events", "llm_stream_mode": "never"})
-            while not queue.empty():
+            while not queue.empty() and not provider.service_error:
                 window = queue.get_nowait()
                 wid, rows = window["id"], window["messages"]
                 JOB.set("memory:" + str(wid))
@@ -224,6 +233,8 @@ async def reconstruct(args, source, dest):
             # One global profile writer preserves identity transfers. Process the next
             # member batch in archive order; each successful CAS is its checkpoint.
             while True:
+                if provider.service_error:
+                    return
                 pending = await store.read_connection.execute_fetchall(
                     "SELECT a.sender_id,MIN(a.id) first_id FROM archive_messages a LEFT JOIN user_profiles p "
                     "ON p.scope_id=a.conversation AND p.user_id=a.sender_id WHERE a.conversation=? "
@@ -250,6 +261,8 @@ async def reconstruct(args, source, dest):
                 print(json.dumps({"profile_batch": pending[0][1]}), flush=True)
 
         await asyncio.gather(*(memory_worker() for _ in range(args.concurrency - 1)), profile_worker())
+        if provider.service_error:
+            await state("service_error", provider.service_error)
     finally:
         async with store.transaction():
             await store.connection.execute("UPDATE reconstruction_runs SET seconds=? WHERE id=?", (time.time() - started, run_id))
