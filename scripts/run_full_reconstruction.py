@@ -88,21 +88,27 @@ class Provider:
             self.ledger.commit()
             call_id = cursor.lastrowid
             try:
-                response = await self.client.post(os.environ["CLIPROXYAPI_BASE_URL"].rstrip("/") + "/chat/completions",
-                    headers={"Authorization": "Bearer " + os.environ["CLIPROXYAPI_API_KEY"]},
-                    json={"model": self.model, "temperature": 0, "messages": [
-                        {"role": "system", "content": system_prompt}, {"role": "user", "content": prompt}]})
-                if response.status_code != 200:
+                for attempt in range(3):
+                    response = await self.client.post(os.environ["CLIPROXYAPI_BASE_URL"].rstrip("/") + "/chat/completions",
+                        headers={"Authorization": "Bearer " + os.environ["CLIPROXYAPI_API_KEY"]},
+                        json={"model": self.model, "temperature": 0, "messages": [
+                            {"role": "system", "content": system_prompt}, {"role": "user", "content": prompt}]})
+                    if response.status_code == 200:
+                        self.consecutive_http_errors = 0
+                        result = response.json()
+                        self.ledger.execute("UPDATE calls SET seconds=?,status='received',model=?,usage=? WHERE id=?",
+                            (time.time() - started, result.get("model"), json.dumps(result.get("usage")), call_id))
+                        self.ledger.commit()
+                        return types.SimpleNamespace(completion_text=result["choices"][0]["message"]["content"])
+                    text_sample = getattr(response, "text", "") or ""
+                    is_location_400 = response.status_code == 400 and "location" in text_sample.lower()
+                    if (response.status_code in (429, 500, 502, 503) or is_location_400) and attempt < 2:
+                        await asyncio.sleep(2 * (attempt + 1))
+                        continue
                     self.consecutive_http_errors += 1
                     if self.consecutive_http_errors >= 6:
                         self.service_error = "consecutive_http_" + str(response.status_code)
                     raise RuntimeError("cloud_http_" + str(response.status_code))
-                self.consecutive_http_errors = 0
-                result = response.json()
-                self.ledger.execute("UPDATE calls SET seconds=?,status='received',model=?,usage=? WHERE id=?",
-                    (time.time() - started, result.get("model"), json.dumps(result.get("usage")), call_id))
-                self.ledger.commit()
-                return types.SimpleNamespace(completion_text=result["choices"][0]["message"]["content"])
             except BaseException as exc:
                 safe_status = str(exc) if re.fullmatch(r"cloud_http_\d{3}", str(exc)) else type(exc).__name__
                 self.ledger.execute("UPDATE calls SET seconds=?,status=? WHERE id=? AND status='inflight'",
@@ -112,7 +118,7 @@ class Provider:
 
 
 async def run(args):
-    if not 3 <= args.concurrency <= 5:
+    if not 1 <= args.concurrency <= 5:
         raise ValueError("concurrency_must_be_3_to_5")
     if not all(os.environ.get(k) for k in ("CLIPROXYAPI_BASE_URL", "CLIPROXYAPI_API_KEY")):
         raise RuntimeError("required_CLIPROXYAPI_environment_missing")
