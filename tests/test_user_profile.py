@@ -269,3 +269,19 @@ async def test_cross_batch_out_of_order_removal_protection(store):
     assert await commit(store, [op(uid="u4", val="Linux", quote="我又开始喜欢Linux了", action="add")])
     p4 = await store.get_user_profile("group:a", "100")
     assert any(f["val"] == "Linux" for f in p4["profile"]["set_slots"]["hobbies"])
+
+
+@pytest.mark.asyncio
+async def test_extractor_handles_markdown_fenced_json(store):
+    await source(store, uid="u_fenced", text="我平时主玩原神", at=5000)
+    rt = runtime(store)
+    store.user_profiles = rt
+    ev = event(user="100")
+    
+    async def mock_extractor(payload):
+        return '```json\n{"operations": [{"slot": "current_main_game", "op": "set", "val": "原神", "source_uid": "u_fenced", "quote": "我平时主玩原神"}]}\n```'
+
+    success = await rt.refresh("group:a", "100", event=ev, extractor=mock_extractor)
+    assert success is True
+    p = await store.get_user_profile("group:a", "100")
+    assert p["profile"]["single_slots"]["current_main_game"]["val"] == "原神"
