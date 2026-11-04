@@ -1,4 +1,29 @@
 {
+    "user_profiles": {
+        "description": "群友人物档案",
+        "hint": "按群与用户 ID 隔离，仅提取本人明确自述的硬事实；后台更新，唤醒时读取。",
+        "type": "object",
+        "items": {
+            "enabled": {
+                "description": "启用人物档案",
+                "hint": "需同时启用原文归档。默认关闭；开启后会使用记忆模型进行后台抽取。",
+                "type": "bool",
+                "default": false
+            },
+            "bot_ids": {
+                "description": "排除的机器人账号",
+                "hint": "填写群管等机器人 QQ 号，以空格、逗号或换行分隔；自身账号始终排除。",
+                "type": "text",
+                "default": ""
+            },
+            "update_interval_seconds": {
+                "description": "同一群友最短更新间隔（秒）",
+                "hint": "默认300秒。到期后的下一条有效自述触发一批最多40条归档；0表示不限制间隔。",
+                "type": "int",
+                "default": 300
+            }
+        }
+    },
     "bot_language": {
         "description": "机器人回复语言",
         "hint": "设置插件命令和状态回复的语言。zh=中文（默认），en=English，ru=Русский，ja=日本語。",

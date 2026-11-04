@@ -5,8 +5,13 @@ from .utils.formatting import _memory_injection_content, safe_parse_metadata
 
 class CleanContextInjector:
     @staticmethod
-    def format_context(dialogue: str = "", memories=(), speaker: str = "") -> str:
+    def format_context(dialogue: str = "", memories=(), speaker: str = "", profile=None) -> str:
         sections = [dialogue] if dialogue else []
+        if isinstance(profile, dict) and profile:
+            from .user_profile import format_profile
+            dossier = format_profile(profile, speaker)
+            if dossier:
+                sections.append(dossier)
         rows = []
         budget = 6000
         for memory in memories:

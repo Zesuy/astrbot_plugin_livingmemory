@@ -252,6 +252,7 @@ class ArchiveStoreMixin:
                 if self.fts_ready:
                     await self.connection.execute("DELETE FROM archive_fts WHERE uid IN(SELECT uid FROM archive_messages WHERE conversation=?)",(conversation,))
                 await self.connection.execute("DELETE FROM archive_messages WHERE conversation=?",(conversation,))
+                await self.connection.execute("DELETE FROM user_profiles WHERE scope_id=?",(conversation,))
                 await self.connection.execute("DELETE FROM messages WHERE session_id=?",(conversation,))
                 await self.connection.execute("UPDATE sessions SET message_count=0,metadata='{}' WHERE session_id=?",(conversation,))
                 await self.connection.execute("UPDATE archive_scopes SET epoch=?,generation=generation+1,cleared_at=? WHERE conversation=?",(epoch,time.time(),conversation))

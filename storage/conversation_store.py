@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 from contextlib import asynccontextmanager
 from .archive_store import ArchiveStoreMixin
+from .user_profile_store import UserProfileStoreMixin, PROFILE_SCHEMA
 
 import aiosqlite
 
@@ -17,7 +18,7 @@ from astrbot.api import logger
 from ..core.models.conversation_models import Session, serialize_to_json
 from .conversation_store_messages import ConversationStoreMessagesMixin
 
-class ConversationStore(ArchiveStoreMixin, ConversationStoreMessagesMixin):
+class ConversationStore(UserProfileStoreMixin, ArchiveStoreMixin, ConversationStoreMessagesMixin):
     """
     会话存储管理器
 
@@ -53,6 +54,8 @@ class ConversationStore(ArchiveStoreMixin, ConversationStoreMessagesMixin):
         await self._create_tables()
         await self._create_indexes()
         await self.initialize_archive()
+        await self.connection.executescript(PROFILE_SCHEMA)
+        await self.connection.commit()
         self.read_connection = await aiosqlite.connect(Path(self.db_path).resolve().as_uri()+"?mode=ro",uri=True)
         self.read_connection.row_factory = aiosqlite.Row
 

@@ -149,6 +149,14 @@ class MemoryRecall:
                 # 存储用户消息（仅私聊），无论是否启用召回都需要
                 is_group = event.get_message_type() == MessageType.GROUP_MESSAGE
                 dialogue_snapshot = self._get_dialogue_context(event)
+                profile = None
+                runtime = getattr(getattr(self.conversation_manager, "store", None), "user_profiles", None)
+                if runtime is not None and is_group and self.config_manager.get("user_profiles.enabled", False):
+                    try:
+                        profile = await runtime.profile_for_event(event)
+                    except Exception:
+                        logger.warning("[UserProfiles] 档案读取失败，跳过本轮档案")
+                event.set_extra("_lm_speaker_profile", profile)
 
                 # 与 AstrBot LLM 历史对账：WebUI 编辑/重试会截断 LLM 历史，
                 # 插件会话库需同步清理被撤销的尾部轮次（仅私聊；群聊被动
@@ -337,7 +345,15 @@ class MemoryRecall:
         speaker = event.get_sender_name()
         if not isinstance(speaker, str):
             speaker = ""
-        text = CleanContextInjector.format_context(dialogue, memories, speaker)
+        profile = event.get_extra("_lm_speaker_profile", None)
+        if isinstance(profile, dict):
+            store = getattr(self.conversation_manager, "store", None)
+            if (not self.config_manager.get("user_profiles.enabled", False)
+                    or event.get_message_type() != MessageType.GROUP_MESSAGE
+                    or store is None
+                    or event.get_extra("_lm_speaker_profile_epoch", None) != store.accepted_epoch(str(event.unified_msg_origin))):
+                profile = None
+        text = CleanContextInjector.format_context(dialogue, memories, speaker, profile=profile)
         if text:
             part = TextPart(text=text).mark_as_temp()
             # Ownership is private runtime metadata, never added to the model text.

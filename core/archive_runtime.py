@@ -32,6 +32,9 @@ class ArchiveRuntime:
         self.accepting = True
         self.migration = {}
         self.store.capture_authorizer = self.may_capture
+        from .user_profile_runtime import UserProfileRuntime
+        self.user_profiles = UserProfileRuntime(self)
+        self.store.user_profiles = self.user_profiles
 
     @property
     def enabled(self):
@@ -166,6 +169,7 @@ class ArchiveRuntime:
                     continue
                 record = capture_event(event,self.store.accepted_epoch(scope))
                 await self.store.archive_record(record)
+                self.user_profiles.submit(event, record)
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -196,3 +200,4 @@ class ArchiveRuntime:
         if self.index_task:
             self.index_task.cancel()
         await asyncio.gather(*(t for t in (self.worker,self.index_task) if t),return_exceptions=True)
+        await self.user_profiles.close()
