@@ -30,6 +30,8 @@ val 为新称呼或别名，quote 为包含双方绑定关系的连续原文，s
 例如“x 不是小李，是老王”输出 {"op":"reassign_alias","target":"老王","val":"x",
 "source_uid":"消息UID","quote":"x 不是小李，是老王"}。
 普通“就是”不代表身份绑定；玩笑、猜测、引用和含糊指代不抽取。
+严禁将歌词、唱段（如带/唱或儿歌歌词）、复读梗、角色扮演或调侃台词提取为真名、偏好称呼或外号！
+other_context 仅用于辨认歌词、玩梗和指代语境，绝不能作为操作的 source_uid 或 quote 来源。
 称呼例外绝不能用于硬件、喜好、游戏或经历槽位。
 """
 
@@ -104,8 +106,13 @@ class UserProfileRuntime:
                    and (self.extractable(plain_evidence(r)) or identity_evidence(r))]
         operations = []
         if targets:
+            context_rows = await self.store.profile_neighbor_context(scope_id, rows)
+            target_uids = {r["source_uid"] for r in targets}
+            context = [{"source_uid": r["uid"], "sender_id": r["sender_id"],
+                        "at": r["sent_at"], "text": plain_evidence(r)[:400]}
+                       for r in context_rows if r["uid"] not in target_uids and plain_evidence(r)]
             payload = json.dumps({"target_user_id": user_id, "existing_slots": snapshot["profile"],
-                                  "target_messages": targets, "other_context": []}, ensure_ascii=False)
+                                  "target_messages": targets, "other_context": context}, ensure_ascii=False)
             if extractor is None:
                 from .astrbot_compat import get_using_provider
                 from .processors.memory_processor import MemoryProcessor

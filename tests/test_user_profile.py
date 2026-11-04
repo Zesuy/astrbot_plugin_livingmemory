@@ -146,11 +146,28 @@ async def test_extractor_only_sees_target_plain_and_runs_without_write_lock(stor
     async def extract(payload):
         assert not store._write_lock.locked()
         data = json.loads(payload)
-        assert data["target_user_id"] == "100" and data["other_context"] == []
+        assert data["target_user_id"] == "100"
+        assert [r["source_uid"] for r in data["other_context"]] == ["other-person"]
         assert [r["source_uid"] for r in data["target_messages"]] == ["one"]
         return json.dumps({"operations": [op()]})
     assert await rt.refresh("group:a", "100", event=event(), extractor=extract)
     assert (await store.get_user_profile("group:a", "100"))["cursor_id"] > 0
+
+
+@pytest.mark.asyncio
+async def test_neighbor_context_is_bounded_to_scope_time_and_not_fact_evidence(store):
+    await source(store, "song-context", "接着唱儿歌", user="200")
+    await source(store, "one", "我叫到贤小淘气")
+    await source(store, "foreign", "私密的其他群", scope="group:b")
+    await source(store, "late", "不相关的其他日期", user="200", at=9000)
+    rt = runtime(store)
+    async def extract(payload):
+        data = json.loads(payload)
+        assert [r["source_uid"] for r in data["other_context"]] == ["song-context"]
+        # Even a model ignoring the instruction cannot use contextual text as evidence.
+        return json.dumps({"operations": [op("song-context", "儿歌", "接着唱儿歌")]})
+    assert await rt.refresh("group:a", "100", event=event(), extractor=extract)
+    assert (await store.get_user_profile("group:a", "100"))["profile"] == empty_profile()
 
 
 @pytest.mark.asyncio

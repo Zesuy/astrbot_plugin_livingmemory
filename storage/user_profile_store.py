@@ -32,6 +32,19 @@ class UserProfileStoreMixin:
             (scope_id, user_id, cursor_id, self.accepted_epoch(scope_id)))
         return [dict(row) for row in rows]
 
+    async def profile_neighbor_context(self, scope_id, sources):
+        """Bounded nearby Plain context; never admitted as profile evidence."""
+        found = {}
+        for source in sources:
+            rows = await self.read_connection.execute_fetchall(
+                "SELECT * FROM archive_messages WHERE conversation=? AND epoch=? "
+                "AND id BETWEEN ? AND ? AND ABS(sent_at-?)<=300 ORDER BY id",
+                (scope_id, self.accepted_epoch(scope_id), source["id"] - 2,
+                 source["id"] + 2, source["sent_at"]))
+            for row in rows:
+                found[row["id"]] = dict(row)
+        return [found[key] for key in sorted(found)][:80]
+
     async def commit_user_profile(self, scope_id, user_id, operations, *,
                                   expected_revision, cursor_id, epoch, allowed_uids):
         """CAS and source revalidation in a short transaction, after model I/O."""
