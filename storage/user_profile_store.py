@@ -2,7 +2,9 @@
 import json
 import time
 
-from ..core.user_profile import apply_operations, empty_profile
+from ..core.user_profile import (apply_operations, empty_profile, IDENTITY_ACTIONS,
+                                 plain_evidence, name_in_text, resolve_member, FIRST_PERSON,
+                                 normalize_value)
 
 PROFILE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS user_profiles (
@@ -54,7 +56,71 @@ class UserProfileStoreMixin:
             if not evidence or evidence[-1]["id"] != cursor_id:
                 return False
             profile = json.loads(rows[0]["profile_json"]) if rows else empty_profile()
-            profile = apply_operations(profile, operations, sources, user_id)
+            profiles = {user_id: profile}
+            bound = {}
+            for original in operations[:30]:
+                if not isinstance(original, dict):
+                    continue
+                op = dict(original)
+                op.pop("_identity_bound", None)
+                target = user_id
+                if op.get("op") in IDENTITY_ACTIONS:
+                    if not all(isinstance(op.get(key), str) for key in ("source_uid", "quote", "val")):
+                        continue
+                    row = sources.get(op.get("source_uid"))
+                    if row is None:
+                        continue
+                    token = op.get("target", "我")
+                    if token in ("我", "本人"):
+                        if not FIRST_PERSON.search(op.get("quote", "")):
+                            continue
+                    elif (isinstance(token, str) and token.isdecimal()
+                          and token in json.loads(row.get("mentions") or "[]")):
+                        target = token
+                    elif isinstance(token, str) and name_in_text(token, op.get("quote", "")):
+                        target = await resolve_member(scope_id, token, self.connection)
+                        if not isinstance(target, str):
+                            continue
+                    else:
+                        continue
+                    if op.get("target_user_id", target) != target:
+                        continue
+                    op["target_user_id"], op["_identity_bound"] = target, True
+                    if target not in profiles:
+                        other = await self.connection.execute_fetchall(
+                            "SELECT profile_json FROM user_profiles WHERE scope_id=? AND user_id=?", (scope_id, target))
+                        profiles[target] = json.loads(other[0][0]) if other else empty_profile()
+                    # Validate before touching another member or transferring aliases.
+                    changed = apply_operations(profiles[target], [op], sources, target)
+                    if changed == profiles[target]:
+                        continue
+                    if op["op"] == "reassign_alias":
+                        owners = await self.connection.execute_fetchall(
+                            "SELECT user_id,profile_json FROM user_profiles WHERE scope_id=?", (scope_id,))
+                        norm = normalize_value(op["val"])
+                        # An old correction must not create a second owner alongside
+                        # a binding or removal learned from a newer message.
+                        owners = {owner: profiles.get(owner, json.loads(payload)) for owner, payload in owners}
+                        latest = [stamp for previous in owners.values() for stamp in
+                                  [previous.get("removals", {}).get("alias:" + norm, 0),
+                                   *[f["at"] for f in previous.get("identity", {}).get("aliases", [])
+                                     if normalize_value(f["val"]) == norm]]]
+                        if latest and max(latest) > row["sent_at"]:
+                            continue
+                        for owner, previous in owners.items():
+                            if owner == target:
+                                continue
+                            removal = dict(op, op="remove_alias", target_user_id=owner)
+                            profiles[owner] = apply_operations(previous, [removal], sources, owner)
+                bound.setdefault(target, []).append(op)
+            for target, ops in bound.items():
+                profiles[target] = apply_operations(profiles[target], ops, sources, target)
+            profile = profiles.pop(user_id)
+            for target, other_profile in profiles.items():
+                await self.connection.execute(
+                    "INSERT INTO user_profiles VALUES(?,?,?,1,0,?) ON CONFLICT(scope_id,user_id) DO UPDATE SET "
+                    "profile_json=excluded.profile_json,revision=user_profiles.revision+1,updated_at=excluded.updated_at",
+                    (scope_id, target, json.dumps(other_profile, ensure_ascii=False), int(time.time())))
             payload = json.dumps(profile, ensure_ascii=False)
             now = int(time.time())
             if revision:

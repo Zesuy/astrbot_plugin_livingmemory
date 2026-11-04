@@ -141,6 +141,8 @@ class MemoryRecall:
 
                 # 先提取用户消息（消息存储和召回都需要）
                 actual_query = await self.message_utils.get_event_message_str(event)
+                from ..user_profile import correction_aliases
+                event.set_extra("_lm_alias_corrections", correction_aliases(actual_query or ""))
 
                 request_query = (
                     prompt_text.strip() if isinstance(prompt_text, str) else ""
@@ -353,7 +355,9 @@ class MemoryRecall:
                     or store is None
                     or event.get_extra("_lm_speaker_profile_epoch", None) != store.accepted_epoch(str(event.unified_msg_origin))):
                 profile = None
-        text = CleanContextInjector.format_context(dialogue, memories, speaker, profile=profile)
+        corrections = event.get_extra("_lm_alias_corrections", None)
+        text = CleanContextInjector.format_context(dialogue, memories, speaker, profile=profile,
+                                                   corrections=corrections)
         if text:
             part = TextPart(text=text).mark_as_temp()
             # Ownership is private runtime metadata, never added to the model text.

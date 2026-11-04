@@ -82,6 +82,13 @@ class ArchiveQueryService:
         self.calls = 0
 
     async def _person(self, conn, conversation, person, question):
+        from ..user_profile import resolve_member
+        learned = await resolve_member(conversation, person, conn, include_archive=False) if person else None
+        if learned:
+            ids = [learned] if isinstance(learned, str) else learned
+            observed = await conn.execute_fetchall("SELECT DISTINCT sender_id,nickname FROM archive_names WHERE conversation=?", (conversation,))
+            return ([{"account_id": uid, "observed_names": sorted({person, *[name for account, name in observed if account == uid]}), "configured_names": []} for uid in ids],
+                    len(ids) > 1, "learned_or_observed_identity")
         rows = await conn.execute_fetchall("SELECT DISTINCT n.sender_id,n.nickname,m.platform FROM archive_names n JOIN archive_messages m ON m.uid=n.uid WHERE n.conversation=?",(conversation,))
         names = {}
         configured = {}
