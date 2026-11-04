@@ -3,6 +3,10 @@ import json
 from pathlib import Path
 import runpy
 import sqlite3
+import sys
+from types import SimpleNamespace
+
+import pytest
 
 
 def test_full_selection_preserves_short_windows_and_excludes_bots(tmp_path, monkeypatch):
@@ -24,3 +28,28 @@ def test_full_selection_preserves_short_windows_and_excludes_bots(tmp_path, monk
     assert result["valid_messages"] == 37
     assert [len(w["messages"]) for w in result["windows"]] == [35, 1, 1]
     assert result["members"] == ["100"]
+
+
+@pytest.mark.asyncio
+async def test_upstream_http_failures_open_circuit_and_remain_in_ledger(tmp_path, monkeypatch):
+    scripts = Path(__file__).resolve().parents[1] / "scripts"
+    monkeypatch.syspath_prepend(str(scripts))
+    calls = []
+    class Client:
+        async def post(self, *args, **kwargs):
+            calls.append(1)
+            return SimpleNamespace(status_code=400)
+    monkeypatch.setitem(sys.modules, "httpx", SimpleNamespace(AsyncClient=lambda **kw: Client()))
+    monkeypatch.setenv("CLIPROXYAPI_BASE_URL", "https://example.invalid/v1")
+    monkeypatch.setenv("CLIPROXYAPI_API_KEY", "test-only")
+    provider_class = runpy.run_path(str(scripts / "run_full_reconstruction.py"))["Provider"]
+    with sqlite3.connect(tmp_path / "ledger.db") as ledger:
+        provider = provider_class("test-model", 4, ledger)
+        for _ in range(6):
+            with pytest.raises(RuntimeError, match="cloud_http_400"):
+                await provider.text_chat(prompt="test", system_prompt="test")
+        with pytest.raises(RuntimeError, match="cloud_suspended"):
+            await provider.text_chat(prompt="test", system_prompt="test")
+        assert len(calls) == 6
+        assert ledger.execute("SELECT status,COUNT(*) FROM calls GROUP BY status").fetchall() == [("cloud_http_400", 6)]
+        assert provider.service_error == "consecutive_http_400"
