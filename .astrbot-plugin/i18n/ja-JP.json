@@ -562,10 +562,12 @@
     "archive": {
       "description": "原文アーカイブ（ツール検索のみ）",
       "enabled": {
-        "description": "原文アーカイブを有効化"
+        "description": "原文アーカイブを有効化",
+        "hint": "既定で有効。会話の権限と収録方針に従います。"
       },
       "query_enabled": {
-        "description": "query_chat_events を登録"
+        "description": "query_chat_events を登録",
+        "hint": "モデルにキーワード・期間・任意の人物による検索を提供します。"
       },
       "capture_mode": {
         "description": "収録ポリシー",
@@ -573,17 +575,21 @@
           "無効",
           "グループ収録設定を継承",
           "許可された全メッセージ"
-        ]
+        ],
+        "hint": "inheritはグループ収録設定を継承、offは停止、permitted_allは許可されたメッセージのみ収録します。"
       },
       "result_chars": {
-        "description": "結果の最大文字数"
+        "description": "結果の最大文字数",
+        "hint": "既定24000文字。長文は返却handleで展開し、cursorで次ページを取得します。"
       },
       "max_candidates": {
-        "description": "トピック候補の上限"
+        "description": "トピック候補の上限",
+        "hint": "既定400候補。上限に達した検索は部分的な結果と明示します。"
       },
       "capture_queue_size": {
         "description": "収録キューの容量"
-      }
+      },
+      "hint": "現在の会話の原文を保存し、キーワード・期間・任意の人物で検索します。自動注入せず、既存の明示設定を保持します。"
     },
     "dialogue_buffer": {
       "description": "グループ会話ウィンドウ",

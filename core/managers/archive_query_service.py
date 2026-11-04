@@ -30,6 +30,7 @@ def tool_output_metadata(row):
 
 
 def window_for(expression: str, start: str, end: str, now: float):
+    expression = expression.strip()
     if expression and (start or end):
         raise ValueError("choose time_range or explicit start/end, not both")
     if start or end:
@@ -43,7 +44,9 @@ def window_for(expression: str, start: str, end: str, now: float):
             raise ValueError("start must precede end")
         return a, min(b,now)
     if expression:
-        recent = re.fullmatch(r'(?:最近|近)(\d{1,2})天',expression)
+        recent = re.fullmatch(r'(?:最近|近)\s*(\d{1,3})\s*天',expression)
+        if expression in {'刚才','刚刚'}:
+            return now-30*60,now
         if expression in {'最近一周','近一周','最近一星期'}:
             recent_days = 7
         elif recent:

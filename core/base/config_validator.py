@@ -182,8 +182,8 @@ class ReflectionEngineConfig(BaseModel):
 
 
 class ArchiveConfig(BaseModel):
-    """Optional source archive; no automatic retrieval or injection."""
-    enabled: bool = False
+    """Source archive enabled by default; retrieval remains tool-only."""
+    enabled: bool = True
     query_enabled: bool = True
     capture_mode: Literal["off","inherit","permitted_all"] = "inherit"
     result_chars: int = Field(default=24000,ge=2000,le=100000)

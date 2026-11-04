@@ -562,10 +562,12 @@
     "archive": {
       "description": "独立原文档案（仅工具查询）",
       "enabled": {
-        "description": "启用独立原文档案"
+        "description": "启用独立原文档案",
+        "hint": "默认启用原文保存，仍遵守会话授权与收录策略。"
       },
       "query_enabled": {
-        "description": "注册 query_chat_events 工具"
+        "description": "注册 query_chat_events 工具",
+        "hint": "向模型提供关键词 + 时间段 + 可选人物检索。"
       },
       "capture_mode": {
         "description": "收录策略",
@@ -573,17 +575,21 @@
           "关闭",
           "继承群聊捕获设置",
           "所有获准消息"
-        ]
+        ],
+        "hint": "inherit继承群聊捕获开关；off不收录；permitted_all仅收录获准消息。"
       },
       "result_chars": {
-        "description": "单次结果字符上限"
+        "description": "单次结果字符上限",
+        "hint": "默认24000字符；长消息可用返回的handle展开，更多消息用cursor续页。"
       },
       "max_candidates": {
-        "description": "主题候选上限"
+        "description": "主题候选上限",
+        "hint": "默认400条候选；达到上限会返回部分覆盖状态。"
       },
       "capture_queue_size": {
         "description": "捕获队列容量"
-      }
+      },
+      "hint": "默认保存本会话原文；按关键词、时间段及可选人物查询，不自动注入。关闭后停止新原文收录；已有显式设置保持不变。"
     },
     "dialogue_buffer": {
       "description": "群聊旁听滑窗",

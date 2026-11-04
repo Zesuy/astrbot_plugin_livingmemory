@@ -1163,8 +1163,8 @@
         "items": {
             "enabled": {
                 "type": "bool",
-                "default": false,
-                "description": "启用独立原文档案"
+                "default": true,
+                "description": "默认启用原文保存，供关键词、时间段和可选人物检索"
             },
             "query_enabled": {
                 "type": "bool",

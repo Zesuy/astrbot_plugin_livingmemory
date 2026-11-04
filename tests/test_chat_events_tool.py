@@ -417,3 +417,89 @@ async def test_tool_output_is_explicit_idempotent_and_revoked_by_clear(store):
     await store.clear_archive(event.unified_msg_origin)
     assert (await runtime.record_tool_output(event, snapshot))["status"] == "not_stored"
     assert (await store.read_connection.execute_fetchall("SELECT COUNT(*) FROM archive_messages"))[0][0] == 0
+
+
+@pytest.mark.parametrize('expression,expected_start,expected_end', [
+    ('今天', '2026-10-05T00:00:00+08:00', '2026-10-05T16:00:00+08:00'),
+    ('昨天', '2026-10-04T00:00:00+08:00', '2026-10-05T00:00:00+08:00'),
+    ('前天', '2026-10-03T00:00:00+08:00', '2026-10-04T00:00:00+08:00'),
+    (' 昨晚 ', '2026-10-04T18:00:00+08:00', '2026-10-05T06:00:00+08:00'),
+    ('最近3天', '2026-10-03T00:00:00+08:00', '2026-10-05T16:00:00+08:00'),
+    (' 最近 3 天 ', '2026-10-03T00:00:00+08:00', '2026-10-05T16:00:00+08:00'),
+    ('最近一周', '2026-09-29T00:00:00+08:00', '2026-10-05T16:00:00+08:00'),
+    ('刚才', '2026-10-05T15:30:00+08:00', '2026-10-05T16:00:00+08:00'),
+    ('2026-10-04', '2026-10-04T00:00:00+08:00', '2026-10-05T00:00:00+08:00'),
+])
+def test_chinese_time_windows(expression, expected_start, expected_end):
+    low, high = window_for(expression, '', '', NOW)
+    assert datetime.fromtimestamp(low, TZ).isoformat() == expected_start
+    assert datetime.fromtimestamp(high, TZ).isoformat() == expected_end
+
+
+def test_relative_windows_at_midnight_and_incomplete_night():
+    midnight = datetime(2026, 10, 5, 0, 30, tzinfo=TZ).timestamp()
+    low, high = window_for('昨天', '', '', midnight)
+    assert datetime.fromtimestamp(low, TZ).isoformat() == '2026-10-04T00:00:00+08:00'
+    assert datetime.fromtimestamp(high, TZ).isoformat() == '2026-10-05T00:00:00+08:00'
+    low, high = window_for('昨晚', '', '', midnight)
+    assert datetime.fromtimestamp(low, TZ).isoformat() == '2026-10-04T18:00:00+08:00'
+    assert high == midnight
+
+
+@pytest.mark.parametrize('expression', ['最近0天', '最近32天', '最近100天', '不明时间'])
+def test_invalid_relative_windows_require_explicit_bounds(expression):
+    with pytest.raises(ValueError):
+        window_for(expression, '', '', NOW)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('person', ['', '雪地'])
+async def test_keyword_time_and_optional_person_lookup(store, person):
+    stamp = lambda day: datetime(2026, 10, day, 12, tzinfo=TZ).timestamp()
+    await store.archive_record(record('wanted', 'SQLite 技术讨论', stamp=stamp(4)))
+    await store.archive_record(record('other', 'SQLite 另一人观点', 'u2', '四格蝶', stamp=stamp(4)))
+    await store.archive_record(record('old', 'SQLite 旧讨论', stamp=stamp(3)))
+    await store.archive_record(record('future', 'SQLite 今日讨论', stamp=stamp(5)))
+    result = await ArchiveQueryService(store).query(
+        conversation='qq:group:1', requester='r', question='昨天如何讨论SQLite',
+        keywords=['SQLite'], time_range='昨天', person=person,
+        person_role='speaker', now=NOW)
+    anchors = [m for m in result['messages'] if not m['context_only']]
+    assert {m['source_uid'] for m in anchors} == ({'wanted'} if person else {'wanted', 'other'})
+    assert all('2026-10-04' in m['time'] for m in anchors)
+
+
+@pytest.mark.asyncio
+async def test_character_budget_pages_and_expands_without_losing_text(store):
+    originals = {'long': '正文' * 1700, 'next': '后续' * 600}
+    for index, (uid, text) in enumerate(originals.items()):
+        await store.archive_record(record(uid, text, stamp=NOW-100+index))
+    service = ArchiveQueryService(store, result_chars=2000)
+    first = await service.query(conversation='qq:group:1', requester='r', question='今天记录',
+                                mode='time_read', time_range='今天', now=NOW)
+    assert sum(len(m['text']) for m in first['messages']) <= 2000
+    assert first['messages'][0]['truncated'] and first['cursor']
+    second = await service.query(conversation='qq:group:1', requester='r', question='继续', cursor=first['cursor'])
+    assert [m['source_uid'] for m in second['messages']] == ['next']
+    chunks = [first['messages'][0]['text']]
+    handle = first['messages'][0]['next_text_handle']
+    while handle:
+        page = await service.query(conversation='qq:group:1', requester='r', question='展开',
+                                   mode='read', evidence_handle=handle)
+        assert sum(len(m['text']) for m in page['messages']) <= 2000
+        chunks.append(page['messages'][0]['text'])
+        handle = page['messages'][0]['next_text_handle']
+    assert ''.join(chunks) == originals['long']
+
+
+def test_archive_default_enabled_but_explicit_opt_out_preserved():
+    from pathlib import Path
+    from astrbot_plugin_livingmemory.core.archive_runtime import ArchiveRuntime
+    schema = json.loads((Path(__file__).resolve().parents[1] / '_conf_schema.json').read_text(encoding='utf-8'))
+    assert schema['archive']['items']['enabled']['default'] is True
+    assert ConfigManager({}).get('archive.enabled') is True
+    config = ConfigManager({'archive': {'enabled': False}})
+    assert config.get('archive.enabled') is False
+    runtime = ArchiveRuntime.__new__(ArchiveRuntime)
+    runtime.config = config
+    assert runtime.enabled is False

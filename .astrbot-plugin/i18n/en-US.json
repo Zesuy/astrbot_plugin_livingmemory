@@ -562,10 +562,12 @@
     "archive": {
       "description": "Source archive (queried by tools only)",
       "enabled": {
-        "description": "Enable source archive"
+        "description": "Enable source archive",
+        "hint": "Enabled by default; session authorization and capture policy still apply."
       },
       "query_enabled": {
-        "description": "Register query_chat_events"
+        "description": "Register query_chat_events",
+        "hint": "Expose keyword + time window + optional person search to the model."
       },
       "capture_mode": {
         "description": "Capture policy",
@@ -573,17 +575,21 @@
           "Off",
           "Inherit group capture",
           "All permitted messages"
-        ]
+        ],
+        "hint": "inherit follows group capture; off stops capture; permitted_all captures authorized messages only."
       },
       "result_chars": {
-        "description": "Maximum result characters"
+        "description": "Maximum result characters",
+        "hint": "Default 24000 characters; expand long messages with returned handles and continue pages with cursor."
       },
       "max_candidates": {
-        "description": "Maximum topic candidates"
+        "description": "Maximum topic candidates",
+        "hint": "Default 400 candidates; bounded searches report partial coverage."
       },
       "capture_queue_size": {
         "description": "Capture queue capacity"
-      }
+      },
+      "hint": "Retain current-conversation originals for keyword + time window + optional person queries; no automatic injection. Existing explicit settings are preserved."
     },
     "dialogue_buffer": {
       "description": "Group dialogue window",

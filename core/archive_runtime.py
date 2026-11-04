@@ -35,7 +35,7 @@ class ArchiveRuntime:
 
     @property
     def enabled(self):
-        return bool(self.config.get("archive.enabled",False))
+        return bool(self.config.get("archive.enabled",True))
 
     async def initialize(self):
         try:
