@@ -1,7 +1,7 @@
 import asyncio
 import json
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 import pytest_asyncio
@@ -11,7 +11,7 @@ from astrbot_plugin_livingmemory.core.clean_context import CleanContextInjector
 from astrbot_plugin_livingmemory.core.event_handler_modules.memory_recall import MemoryRecall
 from astrbot_plugin_livingmemory.core.models.archive_models import ArchiveMessage
 from astrbot_plugin_livingmemory.core.user_profile import apply_operations, empty_profile
-from astrbot_plugin_livingmemory.core.user_profile_runtime import UserProfileRuntime
+from astrbot_plugin_livingmemory.core.user_profile_runtime import UserProfileRuntime, _safe_error_summary
 from astrbot_plugin_livingmemory.core.utils.injection_adapter import InjectionAdapter
 from astrbot_plugin_livingmemory.storage.conversation_store import ConversationStore
 
@@ -61,6 +61,70 @@ def runtime(store, **settings):
     archive = SimpleNamespace(store=store, config=config, enabled=True,
                               may_capture=AsyncMock(return_value=True), authorized=AsyncMock(return_value=True))
     return UserProfileRuntime(archive)
+
+
+def test_error_summary_redacts_provider_payload_and_keeps_diagnostics():
+    error = RuntimeError('invalid_request_error: unsupported temperature; '
+                         'messages=[private_chat]; existing_slots={private_profile}; api_key=secret')
+    error.status_code = 400
+    error.code = "invalid_request_error"
+    summary = _safe_error_summary(error)
+    assert summary == "status=400; code=invalid_request_error; unsupported"
+    assert len(summary) <= 160
+    assert _safe_error_summary(ValueError("private_chat private_profile secret")) == "details redacted"
+    assert _safe_error_summary(ValueError("invalid_profile_response")) == "invalid_profile_response"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure_kind", ["provider", "getter", "str"])
+async def test_worker_logs_safe_error_and_continues(store, failure_kind):
+    worker = runtime(store)
+    class BrokenGetterError(Exception):
+        @property
+        def status_code(self):
+            raise ValueError("private getter content")
+
+    class BrokenStringError(Exception):
+        def __str__(self):
+            raise ValueError("private string content")
+
+    if failure_kind == "provider":
+        failure = RuntimeError("rate_limit_exceeded: private_chat private_profile api_key=secret")
+        failure.status_code = 429
+        expected = "status=429; rate_limit_exceeded"
+    else:
+        failure = BrokenGetterError() if failure_kind == "getter" else BrokenStringError()
+        expected = "details redacted"
+    worker.refresh = AsyncMock(side_effect=[failure, True])
+    with patch("astrbot_plugin_livingmemory.core.user_profile_runtime.logger") as logger:
+        for user in ("100", "200"):
+            key = ("group:a", user)
+            worker.pending.add(key)
+            worker.queue.put_nowait((key, event(user=user)))
+        worker.task = asyncio.create_task(worker._work())
+        try:
+            await asyncio.wait_for(worker.queue.join(), timeout=2)
+            assert worker.refresh.await_count == 2
+            assert worker.pending == set()
+            logger.warning.assert_called_once_with(
+                "[UserProfiles] 更新未完成 (%s): %s", type(failure).__name__, expected)
+        finally:
+            await worker.close()
+
+
+def test_error_summary_rejects_custom_scalar_formatters():
+    class UnsafeStatus(int):
+        def __format__(self, spec):
+            return "private status content"
+
+    class UnsafeCode(str):
+        def __format__(self, spec):
+            return "private code content"
+
+    error = RuntimeError("private exception content")
+    error.status_code = UnsafeStatus(400)
+    error.code = UnsafeCode("invalid_request_error")
+    assert _safe_error_summary(error) == "details redacted"
 
 
 @pytest.mark.asyncio

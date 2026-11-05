@@ -36,6 +36,36 @@ other_context 仅用于辨认歌词、玩梗和指代语境，绝不能作为操
 """
 
 
+def _safe_error_summary(exc):
+    """Emit diagnostic categories only: provider messages can echo private input."""
+    try:
+        parts = []
+        status = getattr(exc, "status_code", None)
+        if type(status) is int and 100 <= status <= 599:
+            parts.append(f"status={status}")
+        known_codes = {
+            "invalid_request_error", "invalid_api_key", "authentication_error",
+            "permission_denied", "model_not_found", "context_length_exceeded",
+            "rate_limit_exceeded", "insufficient_quota", "content_filter",
+            "server_error", "invalid_profile_response", "invalid_profile_operations",
+        }
+        code = getattr(exc, "code", None)
+        if type(code) is str and code in known_codes:
+            parts.append(f"code={code}")
+        message = str(getattr(exc, "message", exc)).lower()
+        # Only fixed labels reach the log; never include arbitrary message fragments.
+        for label in sorted(known_codes):
+            if re.search(r"(?<![\w])" + re.escape(label) + r"(?![\w])", message):
+                if f"code={label}" not in parts:
+                    parts.append(label)
+        for phrase in ("unsupported", "not supported", "timeout", "timed out", "connection error"):
+            if phrase in message:
+                parts.append(phrase)
+        return "; ".join(parts)[:160] or "details redacted"
+    except Exception:
+        return "details redacted"
+
+
 class UserProfileRuntime:
     def __init__(self, archive):
         self.archive = archive
@@ -81,7 +111,8 @@ class UserProfileRuntime:
                 raise
             except Exception as exc:
                 # Never log raw chats, model payloads or profiles.
-                logger.warning("[UserProfiles] 更新未完成: %s", type(exc).__name__)
+                logger.warning("[UserProfiles] 更新未完成 (%s): %s",
+                               type(exc).__name__, _safe_error_summary(exc))
             finally:
                 self.pending.discard(key)
                 self.queue.task_done()

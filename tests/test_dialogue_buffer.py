@@ -204,6 +204,28 @@ async def test_private_and_disabled_group_do_not_leak_dialogue():
     assert req.extra_user_content_parts == []
 
 
+def test_clean_context_limits_improvisation_and_uses_natural_speech():
+    context = CleanContextInjector.format_context(dialogue="[群聊近况]\n张三: 今天去爬山")
+    assert "简短客观说明目前了解的范围" in context
+    assert "严禁为了凑字数而强行写长篇当堂观察" in context
+    assert "严禁照搬括号、短横线与档案报告排版" in context
+    assert "今天的限定版" not in context
+
+
+@pytest.mark.parametrize("kwargs", [
+    {"memories": [{"content": "周末约好爬山"}]},
+    {"profile": {"single_slots": {"current_main_game": {"val": "游戏A", "at": 1000}},
+                 "set_slots": {}}},
+])
+def test_clean_context_guidelines_without_dialogue(kwargs):
+    context = CleanContextInjector.format_context(**kwargs)
+    assert "【证据边界与回答准则】" in context
+    assert "必须以【说话人档案】与【长期记忆与历史事件】为依据" in context
+    assert "简短客观说明目前了解的范围" in context
+    assert "严禁照搬括号、短横线与档案报告排版" in context
+    assert "[群聊近况]" not in context
+
+
 def test_clean_context_preserves_live_atom_filtering_and_budget():
     text = CleanContextInjector.format_context(
         memories=[
@@ -218,9 +240,10 @@ def test_clean_context_preserves_live_atom_filtering_and_budget():
         ],
         speaker="Alice",
     )
-    assert text == "[长期记忆与历史事件]\n- live fact\n\n[本轮说话人]\nAlice"
+    assert text.split("\n\n【证据边界与回答准则】", 1)[0] == "[长期记忆与历史事件]\n- live fact\n\n[本轮说话人]\nAlice"
+    assert "expired fact" not in text
     text = CleanContextInjector.format_context(memories=[{"content": "x" * 10000}] * 50)
-    assert len(text) < 6100
+    assert len(text.split("\n\n【证据边界与回答准则】", 1)[0]) < 6100
 
 
 def test_missing_adapter_message_id_is_stable_per_event():
