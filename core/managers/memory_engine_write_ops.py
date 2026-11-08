@@ -10,6 +10,7 @@ from typing import Any
 
 from astrbot.api import logger
 
+from ..memory_scope import scope_sql
 from ..memory_scope import adapter_cache_key, adapter_sql
 
 from ...storage.atom_store import AtomStore
@@ -50,7 +51,7 @@ class MemoryEngineWriteOpsMixin:
         self,
         query: str,
         k: int,
-        session_id: str | None,
+        session_id: str | tuple[str, ...] | list[str] | None,
         persona_id: str | None,
     ) -> tuple[Any, ...]:
         return (
@@ -58,7 +59,7 @@ class MemoryEngineWriteOpsMixin:
             adapter_cache_key(),
             self._normalize_cache_query(query),
             int(k),
-            session_id or "",
+            tuple(sorted(set(session_id))) if isinstance(session_id, (tuple, list, set)) else session_id or "",
             persona_id or "",
             bool(self.dual_route_retriever is not None),
             round(float(self.config.get("document_route_weight", 0.65)), 4),
@@ -133,7 +134,7 @@ class MemoryEngineWriteOpsMixin:
     async def _get_recent_memory_results(
         self,
         count: int,
-        session_id: str | None,
+        session_id: str | tuple[str, ...] | list[str] | None,
         persona_id: str | None,
     ) -> list[HybridResult]:
         if count <= 0 or self.db_connection is None:
@@ -145,8 +146,9 @@ class MemoryEngineWriteOpsMixin:
         ]
         params: list[Any] = []
         if session_id is not None:
-            conditions.append("json_extract(metadata, '$.session_id') = ?")
-            params.append(session_id)
+            predicate, scope_params = scope_sql("json_extract(metadata, '$.session_id')", session_id)
+            conditions.append(predicate)
+            params.extend(scope_params)
         if persona_id is not None:
             conditions.append("json_extract(metadata, '$.persona_id') = ?")
             params.append(persona_id)
@@ -188,7 +190,7 @@ class MemoryEngineWriteOpsMixin:
         self,
         results: list[HybridResult],
         k: int,
-        session_id: str | None,
+        session_id: str | tuple[str, ...] | list[str] | None,
         persona_id: str | None,
     ) -> list[HybridResult]:
         recent_count = min(max(0, int(self.config.get("recent_memory_count", 2))), k)

@@ -1,13 +1,14 @@
 """Beta 共用证据读取：每次校验权限与生命周期，分页留给最终输出层。"""
 
 import asyncio
+from ..memory_scope import scope_matches
 from typing import Any
 
 
 async def read_memory_evidence_core(
     *,
     memory_engine: Any,
-    recall_session_id: str | None,
+    recall_session_id: str | tuple[str, ...] | list[str] | None,
     recall_persona_id: str | None,
     memory_id: int,
     include_source: bool = False,
@@ -25,7 +26,7 @@ async def read_memory_evidence_core(
     if (
         (
             recall_session_id is not None
-            and metadata.get("session_id") != recall_session_id
+            and not scope_matches(metadata.get("session_id"), recall_session_id)
         )
         or (
             recall_persona_id is not None

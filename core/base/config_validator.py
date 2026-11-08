@@ -259,6 +259,7 @@ class FilteringConfig(BaseModel):
         default="legacy", pattern="^(legacy|session|user|global)$"
     )
     isolated_sessions: str = Field(default="", description="强制隔离的会话列表")
+    shared_group_scopes: str = ""
     shared_adapter_ids: list[str] | None = Field(
         default=None, description="Adapter instances sharing long-term memory"
     )

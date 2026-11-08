@@ -15,7 +15,7 @@ import aiosqlite
 
 from ..utils.event_memory import parse_overview_window
 from ..utils.recall_policy import name_in_query
-from ..memory_scope import parse_identity_aliases
+from ..memory_scope import parse_identity_aliases, scope_sql
 from .archive_sampling import overview, style_sample, author_parts
 
 TZ = ZoneInfo("Asia/Shanghai")
@@ -82,22 +82,28 @@ class ArchiveQueryService:
         self.calls = 0
 
     async def _person(self, conn, conversation, person, question):
-        from ..user_profile import resolve_member
+        from ..user_profile import resolve_member, read_scope_profiles, retired_aliases, normalize_value
+        profiles = await read_scope_profiles(conversation, conn)
+        retired = retired_aliases(profiles)
+        if person and not person.isdigit() and normalize_value(person) in retired:
+            return [], False, "explicitly_retired_alias"
+        predicate, scope_args = scope_sql("conversation", conversation)
         learned = await resolve_member(conversation, person, conn, include_archive=False) if person else None
         if learned:
             ids = [learned] if isinstance(learned, str) else learned
-            observed = await conn.execute_fetchall("SELECT DISTINCT sender_id,nickname FROM archive_names WHERE conversation=?", (conversation,))
-            return ([{"account_id": uid, "observed_names": sorted({person, *[name for account, name in observed if account == uid]}), "configured_names": []} for uid in ids],
+            observed = await conn.execute_fetchall("SELECT DISTINCT sender_id,nickname FROM archive_names WHERE " + predicate, scope_args)
+            return ([{"account_id": uid, "observed_names": sorted({person, *[name for account, name in observed if account == uid and normalize_value(name) not in retired_aliases(profiles, uid)]}), "configured_names": []} for uid in ids],
                     len(ids) > 1, "learned_or_observed_identity")
-        rows = await conn.execute_fetchall("SELECT DISTINCT n.sender_id,n.nickname,m.platform FROM archive_names n JOIN archive_messages m ON m.uid=n.uid WHERE n.conversation=?",(conversation,))
+        rows = await conn.execute_fetchall("SELECT DISTINCT n.sender_id,n.nickname,m.platform FROM archive_names n JOIN archive_messages m ON m.uid=n.uid WHERE " + predicate.replace("conversation", "n.conversation"),scope_args)
         names = {}
         configured = {}
         manual = parse_identity_aliases(self.identity_aliases)
         for account,nickname,platform in rows:
-            names.setdefault(account,set()).add(nickname)
+            if normalize_value(nickname) not in retired_aliases(profiles, account):
+                names.setdefault(account,set()).add(nickname)
             for source in (platform+":"+account,account,nickname):
                 alias = manual.get(source.casefold())
-                if alias:
+                if alias and normalize_value(alias) not in retired_aliases(profiles, account):
                     configured.setdefault(account,set()).add(alias)
         found = {account for account,aliases in names.items()
                  if (person and (person==account or person in aliases))
@@ -115,10 +121,16 @@ class ArchiveQueryService:
             for hint in hints:
                 if hint.get("sender_id"):
                     account = str(hint["sender_id"])
-                    names.setdefault(account,set()).update(hint.get("aliases",[]))
+                    personal_retired = retired_aliases(profiles, account)
+                    aliases = [name for name in hint.get("aliases", []) if normalize_value(name) not in personal_retired]
+                    if (hint.get("aliases") and not aliases) or (person and normalize_value(person) in personal_retired):
+                        continue
+                    names.setdefault(account,set()).update(aliases)
                     found.add(account)
         if person and person.isdigit():
             found.add(person)
+        if person and not found and any(normalize_value(person) in retired_aliases(profiles, uid) for uid in profiles):
+            hint_status = "explicitly_retired_alias"
         accounts = [{"account_id":a,"observed_names":sorted(names.get(a,[])),"configured_names":sorted(configured.get(a,[]))} for a in sorted(found)]
         ambiguous = bool(person and len(found)>1)
         return accounts,ambiguous,hint_status
@@ -148,8 +160,9 @@ class ArchiveQueryService:
     async def query(self, *, conversation, requester, question="", mode="lookup",
                     person="", person_role="about", keywords=None, time_range="",
                     start="", end="", cursor="", evidence_handle="", page_size=40,
-                    now=None, exclude_uid=""):
+                    now=None, exclude_uid="", read_scopes=None):
         self.calls += 1
+        scopes = tuple(sorted(set(read_scopes or (conversation,))))
         if len(question)>4000 or len(person)>200 or len(keywords or [])>24 or any(not isinstance(k,str) or len(k)>160 for k in keywords or []):
             return {"status":"error","error":"query input exceeds bounded tool limits"}
         now = time.time() if now is None else now
@@ -175,7 +188,7 @@ class ArchiveQueryService:
             snapshot = self.snapshots.get(token)
             if not snapshot or snapshot["expires"] < time.monotonic():
                 return {"status":"invalidated","reason":"unknown_or_expired_cursor"}
-            if snapshot["conversation"]!=conversation or snapshot["requester"]!=requester:
+            if snapshot["conversation"]!=conversation or snapshot["requester"]!=requester or snapshot["scopes"] != scopes:
                 return {"status":"unavailable","reason":"cursor_scope_mismatch"}
             if mode=="read" and evidence_handle:
                 if not 0<=read_offset<len(snapshot["rows"]):
@@ -207,15 +220,19 @@ class ArchiveQueryService:
         async with aiosqlite.connect(self.path,uri=True) as conn:
             conn.row_factory = aiosqlite.Row
             await conn.execute("BEGIN")
-            state = await conn.execute_fetchall("SELECT epoch,generation FROM archive_scopes WHERE conversation=?",(conversation,))
-            epoch,generation = tuple(state[0]) if state else (0,0)
-            watermark = (await conn.execute_fetchall("SELECT COALESCE(MAX(id),0) FROM archive_messages WHERE conversation=?",(conversation,)))[0][0]
-            accounts,ambiguous,hint_status = ([],False,"not_used") if mode in {"time_read","overview"} and not person else await self._person(conn,conversation,person,question)
+            states = {}
+            for scope in scopes:
+                state = await conn.execute_fetchall("SELECT epoch,generation FROM archive_scopes WHERE conversation=?",(scope,))
+                epoch, generation = tuple(state[0]) if state else (0, 0)
+                watermark = (await conn.execute_fetchall("SELECT COALESCE(MAX(id),0) FROM archive_messages WHERE conversation=?",(scope,)))[0][0]
+                states[scope] = (epoch, generation, watermark)
+            watermark = max(state[2] for state in states.values())
+            accounts,ambiguous,hint_status = ([],False,"not_used") if mode in {"time_read","overview"} and not person else await self._person(conn,scopes,person,question)
             resolved = {"original_question":question,"mode":mode,"conversation":conversation,
                         "person":person,"person_role":person_role,"accounts":accounts,
                         "time_start":datetime.fromtimestamp(low,TZ).isoformat() if low is not None else None,
                         "time_end_exclusive":datetime.fromtimestamp(high,TZ).isoformat(),
-                        "timezone":"Asia/Shanghai","watermark":watermark,"identity_hint":hint_status}
+                        "timezone":"Asia/Shanghai","watermark":watermark,"scope_watermarks":{scope: state[2] for scope, state in states.items()},"conversations":scopes,"identity_hint":hint_status}
             if ambiguous:
                 return {"status":"ambiguous","resolved_query":resolved}
             unresolved_person = bool(person and not accounts)
@@ -231,8 +248,13 @@ class ArchiveQueryService:
                 if not person or len(ids)!=1:
                     return {'status':'ambiguous','resolved_query':resolved,'note':'style_sample requires one explicit, resolved person/account; no nickname guessing'}
                 person_role = resolved['person_role'] = 'speaker'
-            clauses = ["conversation=?","id<=?","epoch=?","(COALESCE(sent_at,saved_at)<? OR COALESCE(sent_at,saved_at) IS NULL)"]
-            params = [conversation,watermark,epoch,high]
+            scope_conditions = []
+            params = []
+            for scope, (scope_epoch, _, scope_watermark) in states.items():
+                scope_conditions.append("(conversation=? AND id<=? AND epoch=?)")
+                params.extend((scope, scope_watermark, scope_epoch))
+            clauses = ["(" + " OR ".join(scope_conditions) + ")", "(COALESCE(sent_at,saved_at)<? OR COALESCE(sent_at,saved_at) IS NULL)"]
+            params.append(high)
             if low is not None:
                 clauses.append("COALESCE(sent_at,saved_at)>=?")
                 params.append(low)
@@ -312,7 +334,8 @@ class ArchiveQueryService:
                     clock = anchor["sent_at"] or anchor["saved_at"]
                     # Explicit reply relationships can retrieve short, keyword-free answers.
                     context_where = "conversation=? AND id<=? AND epoch=? AND (COALESCE(sent_at,saved_at)<? OR COALESCE(sent_at,saved_at) IS NULL)"
-                    context_params = [conversation,watermark,epoch,high]
+                    anchor_epoch, _, anchor_watermark = states[anchor["conversation"]]
+                    context_params = [anchor["conversation"],anchor_watermark,anchor_epoch,high]
                     neighbors = await conn.execute_fetchall("SELECT * FROM archive_messages WHERE "+context_where+" AND ((reply_key IS NOT NULL AND reply_key=?) OR (native_key IS NOT NULL AND native_key=?)) ORDER BY id LIMIT 24",[*context_params,anchor["native_key"],anchor["reply_key"]])
                     before,after = [],[]
                     if clock is not None:
@@ -338,7 +361,7 @@ class ArchiveQueryService:
                 rows = list(rows_by_uid.values())
             token = uuid.uuid4().hex
             snapshot = {"token":token,"conversation":conversation,"requester":requester,
-                        "generation":generation,"epoch":epoch,"expires":time.monotonic()+900,
+                        "scopes":scopes,"states":states,"expires":time.monotonic()+900,
                         "position":0,"delivered":set(),"rows":[(r["uid"],r["revision"]) for r in rows],
                         "reasons":hit_reasons,"resolved":resolved,"available":available,
                         "bounded":bounded,"low":low,"high":high,"sampling":sampling}
@@ -356,13 +379,13 @@ class ArchiveQueryService:
         async with aiosqlite.connect(self.path,uri=True) as conn:
             conn.row_factory = aiosqlite.Row
             await conn.execute("BEGIN")
-            state = await conn.execute_fetchall("SELECT epoch,generation FROM archive_scopes WHERE conversation=?",(conversation,))
-            if state and tuple(state[0])!=(snapshot["epoch"],snapshot["generation"]):
+            if not await self._snapshot_valid(conn, snapshot):
                 return {"status":"invalidated","reason":"source_changed_or_cleared"}
             selected = snapshot["rows"][offset:offset+size]
             messages,used = [],0
             for index,(uid,revision) in enumerate(selected,offset):
-                rows = await conn.execute_fetchall("SELECT * FROM archive_messages WHERE uid=? AND conversation=?",(uid,conversation))
+                predicate, scope_args = scope_sql("conversation", snapshot["scopes"])
+                rows = await conn.execute_fetchall("SELECT * FROM archive_messages WHERE uid=? AND " + predicate,(uid,*scope_args))
                 if not rows or rows[0]["revision"]!=revision:
                     return {"status":"invalidated","reason":"source_revision_changed"}
                 row = rows[0]
@@ -384,7 +407,7 @@ class ArchiveQueryService:
                     break
                 clock = row["sent_at"] or row["saved_at"]
                 next_offset = text_offset+limit
-                messages.append({"source_uid":uid,"revision":revision,"evidence_handle":snapshot["token"]+":"+str(index)+":"+str(text_offset),
+                messages.append({"source_uid":uid,"conversation":row["conversation"],"revision":revision,"evidence_handle":snapshot["token"]+":"+str(index)+":"+str(text_offset),
                     "next_text_handle":snapshot["token"]+":"+str(index)+":"+str(next_offset) if next_offset<len(text) else None,"text_offset":text_offset,"sender_id":row["sender_id"],
                     "empty_text":not text,
                     "sender_name":row["nickname"],"role":row["role"],"time":datetime.fromtimestamp(clock,TZ).isoformat() if clock else None,
@@ -405,8 +428,7 @@ class ArchiveQueryService:
                     if projection!='original':
                         messages[-1]['next_text_handle']=None
                 used += limit + auxiliary_chars
-        latest = await self.store.read_connection.execute_fetchall("SELECT epoch,generation FROM archive_scopes WHERE conversation=?",(conversation,))
-        if latest and tuple(latest[0])!=(snapshot["epoch"],snapshot["generation"]):
+        if not await self._snapshot_valid(self.store.read_connection, snapshot):
             return {"status":"invalidated","reason":"changed_before_publish"}
         position = offset+len(messages)
         snapshot["delivered"].update(range(offset,position))
@@ -427,3 +449,12 @@ class ArchiveQueryService:
                     if snapshot["resolved"]["mode"]=="time_read" and len(snapshot["delivered"])<snapshot["available"] else "原文仅证明当时说过什么；部分长消息需继续展开，不保证现实事实或原群历史完整。",
                 "archive_coverage":{"complete_capture":False,"note":"Retained records only; legacy time is save time; duplicates may exist. No support found does not prove an event never occurred."},
                 "interpretation":"Authors, At and Reply are relationships, not proof of fact ownership. tool_output identifies the triggering user and target conversation, not an individual recipient or reader. send_call_returned records submitted content after the send API returned normally; it is not a platform message receipt. A person_context_candidate only shares identity, not proven topic relevance. Bot statements are not independent confirmation. Partial time_read covers only returned pages; continue with cursor or explicitly state the limited reading range."}
+
+
+    @staticmethod
+    async def _snapshot_valid(conn, snapshot):
+        for scope, (epoch, generation, _) in snapshot["states"].items():
+            state = await conn.execute_fetchall("SELECT epoch,generation FROM archive_scopes WHERE conversation=?", (scope,))
+            if (tuple(state[0]) if state else (0, 0)) != (epoch, generation):
+                return False
+        return True

@@ -511,6 +511,12 @@
                 "type": "text",
                 "default": ""
             },
+            "shared_group_scopes": {
+                "description": "互通群聊组",
+                "hint": "每行填写一组互通的群号（逗号或空格分隔），例如：530216971, 909660891。仅同一适配器内联合读取；写入与旁听仍按各群独立。群组不可重叠，强制隔离优先。",
+                "type": "text",
+                "default": ""
+            },
             "shared_adapter_ids": {
                 "description": "互通的适配器",
                 "hint": "",

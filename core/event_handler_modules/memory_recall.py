@@ -19,7 +19,8 @@ from ..dialogue_buffer import dialogue_event_id
 from ..memory_scope import (
     is_event_memory_allowed,
     is_suspicious_session_id,
-    resolve_memory_scope,
+    resolve_memory_read_scope,
+    resolve_group_read_scopes,
 )
 from ..utils import (
     OperationContext,
@@ -214,7 +215,7 @@ class MemoryRecall:
                 # 因此不能直接依赖 req.system_prompt 已注入人格，需自行走完整优先级。
                 persona_id = await get_persona_id(self.context, event)
 
-                recall_session_id = resolve_memory_scope(self.config_manager, event)
+                recall_session_id = resolve_memory_read_scope(self.config_manager, event)
                 recall_persona_id = persona_id if use_persona_filtering else None
 
                 # 使用原始用户输入作为召回关键字
@@ -349,11 +350,14 @@ class MemoryRecall:
             speaker = ""
         profile = event.get_extra("_lm_speaker_profile", None)
         if isinstance(profile, dict):
+            epochs = event.get_extra("_lm_speaker_profile_epochs", None)
             store = getattr(self.conversation_manager, "store", None)
             if (not self.config_manager.get("user_profiles.enabled", False)
                     or event.get_message_type() != MessageType.GROUP_MESSAGE
                     or store is None
-                    or event.get_extra("_lm_speaker_profile_epoch", None) != store.accepted_epoch(str(event.unified_msg_origin))):
+                    or not isinstance(epochs, dict)
+                    or set(epochs) != set(resolve_group_read_scopes(self.config_manager, event))
+                    or any(store.accepted_epoch(scope) != epoch for scope, epoch in epochs.items())):
                 profile = None
         corrections = event.get_extra("_lm_alias_corrections", None)
         text = CleanContextInjector.format_context(dialogue, memories, speaker, profile=profile,

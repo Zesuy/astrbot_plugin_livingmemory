@@ -14,6 +14,7 @@ import aiosqlite
 from astrbot.api import logger
 
 from ..processors.text_processor import TextProcessor
+from ..memory_scope import scope_sql
 from ..memory_scope import adapter_sql
 
 
@@ -171,7 +172,7 @@ class BM25Retriever:
         self,
         query: str,
         limit: int = 50,
-        session_id: str | None = None,
+        session_id: str | tuple[str, ...] | list[str] | None = None,
         persona_id: str | None = None,
     ) -> list[BM25Result]:
         """
@@ -217,8 +218,9 @@ class BM25Retriever:
         filters.append(adapter_filter)
         params.extend(adapter_params)
         if session_id is not None:
-            filters.append(f"json_extract({metadata_sql}, '$.session_id') = ?")
-            params.append(session_id)
+            predicate, scope_params = scope_sql(f"json_extract({metadata_sql}, '$.session_id')", session_id)
+            filters.append(predicate)
+            params.extend(scope_params)
         if persona_id is not None:
             filters.append(f"json_extract({metadata_sql}, '$.persona_id') = ?")
             params.append(persona_id)

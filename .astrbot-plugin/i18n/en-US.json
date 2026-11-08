@@ -255,6 +255,10 @@
         "description": "Forced Isolated Sessions",
         "hint": "Enter one full session ID per line. These sessions always use their own memory scope, overriding Per User, Global, and disabled legacy session filtering."
       },
+      "shared_group_scopes": {
+        "description": "Shared group scopes",
+        "hint": "One group per line, with group IDs separated by commas or spaces, e.g. 530216971, 909660891. Reads are shared within the same adapter; writes and dialogue buffers stay separate. Overlapping groups are rejected; forced isolation takes precedence."
+      },
       "shared_adapter_ids": {
         "description": "Adapters sharing memory",
         "hint": ""

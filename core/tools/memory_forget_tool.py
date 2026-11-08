@@ -119,7 +119,7 @@ class MemoryForgetTool(FunctionTool[AstrAgentContext]):
                 recall_session_id,
                 recall_persona_id,
                 access_error,
-            ) = await resolve_tool_access(self.config_manager, self.context, context)
+            ) = await resolve_tool_access(self.config_manager, self.context, context, federated=False)
             with adapter_access(self.config_manager, event):
                 if access_error is not None:
                     return _json_result({"forgotten": False, **access_error})
@@ -164,6 +164,11 @@ class MemoryForgetTool(FunctionTool[AstrAgentContext]):
                         }
                     )
 
+                # Group administration never grants destructive access to another
+                # physical group's records, including global/legacy shared reads.
+                physical_origin = str(event.unified_msg_origin)
+                if physical_origin.count(":") >= 2 and physical_origin.rsplit(":", 2)[1] == "GroupMessage":
+                    recall_session_id = physical_origin
                 # 限流：同一会话冷却期内拒绝，且只在归档成功后才刷新时间戳
                 cooldown_scope = recall_session_id or event.unified_msg_origin
                 cooldown = self._cooldown_seconds()

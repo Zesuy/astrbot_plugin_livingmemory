@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..core.memory_scope import scope_sql, scope_matches
 from ..core.memory_scope import adapter_sql
 
 import aiosqlite
@@ -100,7 +101,7 @@ class GraphStoreReadMixin:
         self,
         fts_query: str,
         limit: int,
-        session_id: str | None = None,
+        session_id: str | tuple[str, ...] | list[str] | None = None,
         persona_id: str | None = None,
     ) -> list[dict[str, Any]]:
         """Search graph entries through the FTS table."""
@@ -109,8 +110,9 @@ class GraphStoreReadMixin:
         ]
         params: list[Any] = [fts_query]
         if session_id is not None:
-            filters.append("ge.session_id = ?")
-            params.append(session_id)
+            predicate, scope_params = scope_sql("ge.session_id", session_id)
+            filters.append(predicate)
+            params.extend(scope_params)
         if persona_id is not None:
             filters.append("ge.persona_id = ?")
             params.append(persona_id)
@@ -237,7 +239,7 @@ class GraphStoreReadMixin:
         self,
         node_ids: list[int],
         limit: int,
-        session_id: str | None = None,
+        session_id: str | tuple[str, ...] | list[str] | None = None,
         persona_id: str | None = None,
     ) -> list[dict[str, Any]]:
         """Expand one hop from matched nodes to their linked entries."""
@@ -251,8 +253,9 @@ class GraphStoreReadMixin:
         params: list[Any] = list(node_ids)
 
         if session_id is not None:
-            filters.append("ge.session_id = ?")
-            params.append(session_id)
+            predicate, scope_params = scope_sql("ge.session_id", session_id)
+            filters.append(predicate)
+            params.extend(scope_params)
         if persona_id is not None:
             filters.append("ge.persona_id = ?")
             params.append(persona_id)
@@ -348,7 +351,7 @@ class GraphStoreReadMixin:
         return [int(row[0]) for row in rows]
 
     async def resolve_account_aliases(
-        self, query: str, session_id: str | None, persona_id: str | None
+        self, query: str, session_id: str | tuple[str, ...] | list[str] | None, persona_id: str | None
     ) -> list[dict[str, Any]]:
         """Return observed names of mentioned accounts, restricted to recall scope.
 
@@ -361,8 +364,9 @@ class GraphStoreReadMixin:
         filters = ["gn.node_type = 'person'", "gn.canonical_value LIKE 'account:%'"]
         params = []
         if session_id is not None:
-            filters.append("ge.session_id = ?")
-            params.append(session_id)
+            predicate, scope_params = scope_sql("ge.session_id", session_id)
+            filters.append(predicate)
+            params.extend(scope_params)
         if persona_id is not None:
             filters.append("ge.persona_id = ?")
             params.append(persona_id)
@@ -390,7 +394,7 @@ class GraphStoreReadMixin:
                     continue
                 if not adapter_visible({"adapter_id": infer_adapter_id(observation)}):
                     continue
-                if session_id is not None and observation.get("session_id") != session_id:
+                if session_id is not None and not scope_matches(observation.get("session_id"), session_id):
                     continue
                 if persona_id is not None and observation.get("persona_id") != persona_id:
                     continue

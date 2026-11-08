@@ -17,7 +17,7 @@ from astrbot.core.agent.tool import FunctionTool, ToolExecResult
 from astrbot.core.astr_agent_context import AstrAgentContext
 
 from ..base.config_manager import ConfigManager
-from ..memory_scope import resolve_memory_scope
+from ..memory_scope import resolve_memory_read_scope
 from .agentic_recall_budget import (
     get_or_create_budget,
     run_within_budget,
@@ -179,7 +179,7 @@ class AgenticMemorySearchTool(FunctionTool[AstrAgentContext]):
             # 作用域跨会话共享，legacy 未启用会话过滤（scope 为 None）也不是会话
             # 过滤；只有解析出的作用域就是当前会话 ID 时才为 True，避免误报
             # “会话隔离仍然生效”而干扰排查。recall_session_id 仍保留回退语义。
-            recall_scope = resolve_memory_scope(self.config_manager, event)
+            recall_scope = resolve_memory_read_scope(self.config_manager, event)
             session_filtered = (
                 recall_scope is not None and recall_scope == event.unified_msg_origin
             )

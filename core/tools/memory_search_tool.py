@@ -15,7 +15,7 @@ from astrbot.core.agent.tool import FunctionTool, ToolExecResult
 from astrbot.core.astr_agent_context import AstrAgentContext
 
 from ..base.config_manager import ConfigManager
-from ..memory_scope import is_event_memory_allowed, resolve_memory_scope
+from ..memory_scope import is_event_memory_allowed, resolve_memory_read_scope
 from ..utils import get_persona_id
 
 
@@ -123,7 +123,7 @@ class MemorySearchTool(FunctionTool[AstrAgentContext]):
                     else None
                 )
 
-                recall_scope = resolve_memory_scope(self.config_manager, event)
+                recall_scope = resolve_memory_read_scope(self.config_manager, event)
                 recall_session_id = recall_scope
                 # session_filtered 只表示本次查询是否真的按会话隔离：global / user
                 # 作用域跨会话共享，legacy 未启用会话过滤（scope 为 None）也不是会话

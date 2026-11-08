@@ -2,6 +2,7 @@
 import copy
 import json
 import re
+from .memory_scope import scope_sql
 
 SINGLE_SLOTS = {"current_main_game": "最近主玩", "device_env": "设备环境"}
 SET_SLOTS = {"hobbies": "喜好/偏好", "key_milestones": "关键经历"}
@@ -61,6 +62,42 @@ def normalize_value(value):
     return re.sub(r"\s+", "", value).casefold()
 
 
+def _set_alias_removal(removals, norm, at, *, transfer):
+    """Update a deletion's timestamp and kind together; deletion wins time ties."""
+    key, transfer_key = "alias:" + norm, "alias-transfer:" + norm
+    previous = removals.get(key, 0)
+    if at < previous:
+        return False
+    if at == previous and removals.get(transfer_key) != previous:
+        transfer = False
+    removals[key] = at
+    if transfer:
+        removals[transfer_key] = at
+    else:
+        removals.pop(transfer_key, None)
+    return True
+
+
+def _merge_removals(target, incoming):
+    for key, at in incoming.items():
+        if key.startswith("alias:"):
+            norm = key[len("alias:"):]
+            _set_alias_removal(target, norm, at, transfer=incoming.get("alias-transfer:" + norm) == at)
+        elif not key.startswith("alias-transfer:"):
+            target[key] = max(target.get(key, 0), at)
+
+
+def _bounded_removals(removals, limit=20):
+    """Keep whole logical entries: alias deletion, kind and assignment travel together."""
+    groups = {}
+    for key, at in removals.items():
+        prefix, separator, norm = key.partition(":")
+        logical = ("alias", norm) if separator and prefix in {"alias", "alias-transfer", "alias-assignment"} else ("value", key)
+        groups.setdefault(logical, {})[key] = at
+    selected = sorted(groups.values(), key=lambda entry: max(entry.values()), reverse=True)[:limit]
+    return {key: at for entry in selected for key, at in entry.items()}
+
+
 def apply_operations(profile, operations, sources, user_id):
     """Apply self-reported facts and explicitly bound, literal identity evidence."""
     result = copy.deepcopy(profile)
@@ -95,6 +132,10 @@ def apply_operations(profile, operations, sources, user_id):
             if not isinstance(at, (int, float)) or at <= 0:
                 continue
             fact = {"val": val, "source_uid": uid, "at": at, "author_id": row["sender_id"]}
+            if action == "reassign_alias":
+                fact["op"] = "reassign_alias"
+            if action == "remove_alias" and op.get("_alias_transfer"):
+                fact["_alias_transfer"] = True
             validated.append((at, row["id"], action, "identity", fact))
             continue
         if row["sender_id"] != user_id:
@@ -128,9 +169,13 @@ def apply_operations(profile, operations, sources, user_id):
                 if any(normalize_value(f["val"]) == norm and f["at"] > fact["at"] for f in items):
                     continue
                 if action == "remove_alias":
-                    removals[key] = max(removals.get(key, 0), fact["at"])
+                    if not _set_alias_removal(removals, norm, fact["at"], transfer=bool(fact.get("_alias_transfer"))):
+                        continue
                     items[:] = [f for f in items if normalize_value(f["val"]) != norm]
                 elif removals.get(key, 0) < fact["at"]:
+                    if action == "reassign_alias":
+                        assignment_key = "alias-assignment:" + norm
+                        removals[assignment_key] = max(removals.get(assignment_key, 0), fact["at"])
                     items[:] = [f for f in items if normalize_value(f["val"]) != norm]
                     items.append(fact)
             continue
@@ -172,8 +217,7 @@ def apply_operations(profile, operations, sources, user_id):
             bounded[section].setdefault(slot, []).append(fact)
         chars += len(fact["val"])
         count += 1
-    sorted_removals = sorted(removals.items(), key=lambda kv: kv[1], reverse=True)[:20]
-    bounded["removals"] = dict(sorted_removals)
+    bounded["removals"] = _bounded_removals(removals)
     return bounded
 
 
@@ -204,16 +248,18 @@ def format_profile(profile, speaker):
 async def resolve_member(scope_id, token, store, *, include_archive=True):
     """Return a unique UID, an ambiguity list, or None; never merge identities."""
     conn = getattr(store, "read_connection", store)
-    rows = await conn.execute_fetchall("SELECT user_id,profile_json FROM user_profiles WHERE scope_id=?", (scope_id,))
+    profiles = await read_scope_profiles(scope_id, conn)
     found = set()
-    for uid, payload in rows:
-        identity = json.loads(payload).get("identity", {})
+    for uid, profile in profiles.items():
+        identity = profile.get("identity", {})
         names = [identity.get("preferred_name"), identity.get("real_name"), *identity.get("aliases", [])]
         if any(f and normalize_value(f["val"]) == normalize_value(token) for f in names):
             found.add(uid)
     if not found and include_archive:
-        rows = await conn.execute_fetchall("SELECT DISTINCT sender_id,nickname FROM archive_names WHERE conversation=?", (scope_id,))
-        found = {uid for uid, name in rows if normalize_value(token) in (normalize_value(name), uid)}
+        rows = await conn.execute_fetchall("SELECT DISTINCT sender_id,nickname FROM archive_names WHERE " + scope_sql("conversation", scope_id)[0], scope_sql("conversation", scope_id)[1])
+        found = {uid for uid, name in rows if token == uid or (
+            normalize_value(token) == normalize_value(name)
+            and normalize_value(token) not in retired_aliases(profiles, uid))}
     ordered = sorted(found)
     return ordered[0] if len(ordered) == 1 else ordered or None
 
@@ -231,3 +277,80 @@ def correction_aliases(text):
         if match:
             return {match[1]: match[2]}
     return {}
+
+
+def merge_profiles(profiles):
+    """Merge read snapshots by source-message time, including cross-scope tombstones."""
+    result = empty_profile()
+    for profile in profiles:
+        _merge_removals(result["removals"], profile.get("removals", {}))
+        for section, keys in (("single_slots", SINGLE_SLOTS), ("identity", ("preferred_name", "real_name"))):
+            for key in keys:
+                fact = profile.get(section, {}).get(key)
+                if fact and fact.get("at", 0) > (result[section].get(key) or {}).get("at", -1):
+                    result[section][key] = fact
+    for section, keys in (("set_slots", SET_SLOTS), ("identity", ("aliases",))):
+        for key in keys:
+            values = {}
+            for profile in profiles:
+                for fact in profile.get(section, {}).get(key, []):
+                    norm = normalize_value(fact["val"])
+                    tombstone = "alias:" + norm if key == "aliases" else norm
+                    if fact["at"] <= result["removals"].get(tombstone, 0):
+                        continue
+                    if norm not in values or fact["at"] > values[norm]["at"]:
+                        values[norm] = fact
+            result[section][key] = list(values.values())
+    # Reuse the same hard budget as persisted profiles; this is a pure reducer.
+    return apply_operations(result, [], {}, "")
+
+
+async def read_scope_profiles(scope_id, store):
+    """Merge each UID and apply explicit deletion/transfer barriers."""
+    conn = getattr(store, "read_connection", store)
+    predicate, scope_args = scope_sql("scope_id", scope_id)
+    rows = await conn.execute_fetchall("SELECT user_id,profile_json FROM user_profiles WHERE " + predicate, scope_args)
+    grouped = {}
+    for uid, payload in rows:
+        grouped.setdefault(uid, []).append(json.loads(payload))
+    profiles = {uid: merge_profiles(parts) for uid, parts in grouped.items()}
+    if isinstance(scope_id, (tuple, list, set)) and len(scope_id) > 1:
+        reassigned = {}
+        # Build barriers from persisted snapshots before merged fact budgets can
+        # discard an alias. Transfer retirements are not independent deletions.
+        for parts in grouped.values():
+            for part in parts:
+                removals = part.get("removals", {})
+                for key, at in removals.items():
+                    if key.startswith("alias-assignment:"):
+                        norm = key[len("alias-assignment:"):]
+                        reassigned[norm] = max(reassigned.get(norm, 0), at)
+                for fact in part.get("identity", {}).get("aliases", []):
+                    if fact.get("op") == "reassign_alias":
+                        norm = normalize_value(fact["val"])
+                        reassigned[norm] = max(reassigned.get(norm, 0), fact["at"])
+        for profile in profiles.values():
+            profile["identity"]["aliases"] = [fact for fact in profile["identity"].get("aliases", [])
+                if fact["at"] >= reassigned.get(normalize_value(fact["val"]), 0)]
+            # Only explicit transfers cross UID boundaries. Personal deletions
+            # were already applied within each UID by merge_profiles.
+            for norm, at in reassigned.items():
+                key = "alias-assignment:" + norm
+                profile["removals"][key] = max(profile["removals"].get(key, 0), at)
+    return profiles
+
+
+def retired_aliases(profiles, user_id=None):
+    """Personal removals stay on their UID; explicit transfers apply to all UIDs."""
+    removed = {key[len("alias-assignment:"):] for profile in profiles.values()
+               for key in profile.get("removals", {}) if key.startswith("alias-assignment:")}
+    selected = profiles.values() if user_id is None else [profiles.get(user_id, {})]
+    if user_id is not None:
+        removed.update(key[len("alias:"):] for key in profiles.get(user_id, {}).get("removals", {})
+                       if key.startswith("alias:"))
+    live = set()
+    for profile in selected:
+        identity = profile.get("identity", {})
+        facts = [identity.get("preferred_name"), identity.get("real_name"), *identity.get("aliases", [])]
+        live.update(normalize_value(fact["val"]) for fact in facts if fact)
+    return removed - live

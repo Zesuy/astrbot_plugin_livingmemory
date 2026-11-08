@@ -276,5 +276,65 @@ __all__ = [
     "parse_value_list",
     "resolve_event_identity",
     "resolve_memory_scope",
+    "resolve_memory_read_scopes",
+    "resolve_group_read_scopes",
+    "resolve_memory_read_scope",
+    "scope_matches",
+    "scope_sql",
     "resolve_sender_alias",
 ]
+
+
+def resolve_group_read_scopes(config: Any, event: Any) -> tuple[str, ...]:
+    """Physical archive/profile scopes, independent of long-term storage policy."""
+    origin = _event_value(event, "unified_msg_origin")
+    adapter, kind, _group = origin.rsplit(":", 2) if origin.count(":") >= 2 else ("", "", "")
+    isolated = set(parse_value_list(_config_get(config, "filtering_settings.isolated_sessions", "")))
+    if kind != "GroupMessage" or origin in isolated:
+        return (origin,)
+    groups = []
+    for line in str(_config_get(config, "filtering_settings.shared_group_scopes", "") or "").splitlines():
+        members = set(re.split(r"[\s,，;；]+", line.strip())) - {""}
+        if not members or any(not value.isdecimal() for value in members):
+            continue
+        groups.append({f"{adapter}:GroupMessage:{value}" for value in members})
+    conflicted = set()
+    for index, members in enumerate(groups):
+        for other in groups[index + 1:]:
+            if members & other:
+                conflicted.update(members | other)
+    if conflicted:
+        from astrbot.api import logger
+        logger.warning("[LivingMemory] shared_group_scopes contains overlapping groups; affected groups remain isolated")
+    for members in groups:
+        if origin in members:
+            if members & (isolated | conflicted):
+                return (origin,)
+            return tuple(sorted(members))
+    return (origin,)
+
+
+def resolve_memory_read_scopes(config: Any, event: Any) -> tuple[str, ...]:
+    """Honor global/user storage policy before federating physical sessions."""
+    mode = str(_config_get(config, "filtering_settings.memory_scope_mode", "legacy")).casefold()
+    if mode in {"global", "user"}:
+        return (resolve_memory_scope(config, event),)
+    return resolve_group_read_scopes(config, event)
+
+
+def resolve_memory_read_scope(config: Any, event: Any):
+    """Use federation when configured, preserving existing legacy/user/global modes."""
+    scopes = resolve_memory_read_scopes(config, event)
+    return scopes if len(scopes) > 1 else resolve_memory_scope(config, event)
+
+
+def scope_matches(actual, requested) -> bool:
+    return requested is None or (actual in requested if isinstance(requested, (tuple, list, set)) else actual == requested)
+
+
+def scope_sql(column: str, requested) -> tuple[str, list]:
+    """Parameterized scalar or union scope predicate; empty collections match nothing."""
+    if isinstance(requested, (tuple, list, set)):
+        values = sorted(set(requested))
+        return (column + " IN (" + ",".join("?" for _ in values) + ")", values) if values else ("0", [])
+    return column + " = ?", [requested]

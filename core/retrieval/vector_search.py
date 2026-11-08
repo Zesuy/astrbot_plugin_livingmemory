@@ -6,7 +6,7 @@ from contextvars import ContextVar
 from types import SimpleNamespace
 
 from ..faiss_async_persist import get_async_persister
-from ..memory_scope import adapter_sql, adapter_visible, current_adapter_access
+from ..memory_scope import adapter_sql, adapter_visible, current_adapter_access, scope_matches
 from ..utils.recall_policy import is_non_substantive
 
 query_embeddings = ContextVar("livingmemory_query_embeddings", default=None)
@@ -17,7 +17,8 @@ async def retrieve_documents(
 ):
     """Apply request ownership in SQL before limiting host document reads."""
     predicate, adapters = adapter_sql("metadata")
-    if not adapters:
+    multi_session = isinstance(metadata_filters.get("session_id"), (tuple, list, set))
+    if not adapters and not multi_session:
         return await db.document_storage.get_documents(
             metadata_filters=metadata_filters, ids=ids, limit=limit, offset=offset
         )
@@ -26,10 +27,15 @@ async def retrieve_documents(
     values = {f"adapter_{i}": value for i, value in enumerate(adapters)}
     for i in range(len(adapters)):
         predicate = predicate.replace("?", f":adapter_{i}", 1)
-    conditions = [predicate]
+    conditions = [predicate] if adapters else []
     for key, value in metadata_filters.items():
-        conditions.append(f"json_extract(metadata, '$.{key}') = :filter_{key}")
-        values[f"filter_{key}"] = value
+        if key == "session_id" and isinstance(value, (tuple, list, set)):
+            sessions = sorted(set(value))
+            conditions.append("json_extract(metadata, '$.session_id') IN (" + ",".join(f":session_{i}" for i in range(len(sessions))) + ")" if sessions else "0")
+            values.update({f"session_{i}": item for i, item in enumerate(sessions)})
+        else:
+            conditions.append(f"json_extract(metadata, '$.{key}') = :filter_{key}")
+            values[f"filter_{key}"] = value
     if ids is not None:
         if not ids:
             return []
@@ -151,7 +157,7 @@ async def retrieve_vectors(db, query, k, filters, *, source_key="id"):
                 k=fetch_k,
                 fetch_k=fetch_k,
                 rerank=False,
-                metadata_filters=filters or None,
+                metadata_filters={key: value for key, value in filters.items() if not isinstance(value, (tuple, list, set))} or None,
             )
             exhausted = not filters and len(raw) < fetch_k
 
@@ -172,7 +178,7 @@ async def retrieve_vectors(db, query, k, filters, *, source_key="id"):
                 continue
             if is_non_substantive(hit.data.get("text"), metadata):
                 continue
-            if any(metadata.get(key) != value for key, value in filters.items()):
+            if any(not scope_matches(metadata.get(key), value) for key, value in filters.items()):
                 continue
             identity = (
                 hit.data.get("id") if source_key == "id" else metadata.get(source_key)

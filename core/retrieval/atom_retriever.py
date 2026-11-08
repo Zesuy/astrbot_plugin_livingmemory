@@ -46,7 +46,7 @@ class AtomRetriever:
         self,
         query: str,
         k: int = 10,
-        session_id: str | None = None,
+        session_id: str | tuple[str, ...] | list[str] | None = None,
         persona_id: str | None = None,
         *,
         relevance_only: bool = False,

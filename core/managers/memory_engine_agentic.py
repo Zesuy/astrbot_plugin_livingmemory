@@ -4,6 +4,8 @@ import asyncio
 
 from astrbot.api import logger
 
+from ..memory_scope import scope_matches
+
 from ..retrieval.hybrid_retriever import HybridResult
 from ..retrieval.recall_diagnostics import all_routes_failed, merge_route
 from ..retrieval.route_execution import search_route
@@ -140,7 +142,7 @@ class MemoryEngineAgenticMixin(MemoryEngineEvidenceMixin, MemoryEngineParticipan
                     for result in results
                     if (
                         session_id is None
-                        or result.metadata.get("session_id") == session_id
+                        or scope_matches(result.metadata.get("session_id"), session_id)
                     )
                     and (
                         persona_id is None
@@ -233,7 +235,7 @@ class MemoryEngineAgenticMixin(MemoryEngineEvidenceMixin, MemoryEngineParticipan
             )
             for document in loaded:
                 metadata = safe_json_dict(document.get("metadata"))
-                if session_id is not None and metadata.get("session_id") != session_id:
+                if session_id is not None and not scope_matches(metadata.get("session_id"), session_id):
                     continue
                 if persona_id is not None and metadata.get("persona_id") != persona_id:
                     continue

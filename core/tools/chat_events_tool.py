@@ -12,6 +12,7 @@ from astrbot.core.agent.tool import FunctionTool, ToolExecResult
 from astrbot.core.agent.run_context import ContextWrapper
 from astrbot.core.astr_agent_context import AstrAgentContext
 
+from ..memory_scope import resolve_group_read_scopes
 from ..memory_scope import is_event_memory_allowed, adapter_access
 from ..passive_group_capture import (PassiveGroupCaptureFilter,is_session_enabled,
                                     is_plugin_enabled_for_session)
@@ -79,6 +80,7 @@ class ChatEventsTool(FunctionTool[AstrAgentContext]):
             exclude_uid = exclude_uid if isinstance(exclude_uid,str) else ''
             with adapter_access(runtime.config, event):
                 result = await asyncio.wait_for(runtime.service.query(conversation=scope,
+                    read_scopes=resolve_group_read_scopes(runtime.config, event),
                     requester=str(event.get_sender_id()),question=query,mode=mode,person=person,
                     person_role=person_role,keywords=keywords,time_range=time_range,start=start,end=end,
                     cursor=cursor,evidence_handle=evidence_handle,page_size=page_size,

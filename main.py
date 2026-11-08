@@ -24,6 +24,7 @@ from .core.event_handler import EventHandler
 from .core.i18n_backend import init as i18n_init
 from .core.i18n_backend import t
 from .core.managers.backup_manager import BackupManager
+from .core.non_target_command_guard import non_target_command
 from .core.page_api import PluginPageApi
 from .core.passive_group_capture import (
     PassiveGroupCaptureFilter,
@@ -423,6 +424,14 @@ class LivingMemoryPlugin(Star):
     @filter.on_llm_request()
     async def handle_memory_recall(self, event: AstrMessageEvent, req: ProviderRequest):
         """[Event Hook] Query and inject long-term memory before LLM request"""
+        command = non_target_command(event)
+        if command is not None:
+            logger.info(
+                f"[LivingMemory] 检测到非目标机器人指令: {command!r}，"
+                "停止 LLM 触发并保持静默"
+            )
+            event.stop_event()
+            return
         self.archive_runtime.submit(event,triggered=True,global_config=self.context.get_config(umo=event.unified_msg_origin))
         ready, _ = await self._ensure_plugin_ready(wait=False)
         if not ready:

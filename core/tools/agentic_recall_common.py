@@ -8,6 +8,7 @@ from ..memory_scope import (
     is_event_memory_allowed,
     resolve_event_identity,
     resolve_memory_scope,
+    resolve_memory_read_scope,
 )
 from ..utils import get_persona_id
 from .memory_evidence_output import fitting_prefix
@@ -39,7 +40,7 @@ def bounded_status(data: dict[str, Any], max_chars: int = 500) -> str:
 
 
 async def resolve_tool_access(
-    config_manager: Any, plugin_context: Any, wrapper_context: Any
+    config_manager: Any, plugin_context: Any, wrapper_context: Any, *, federated: bool = True
 ) -> tuple[Any, str | None, str | None, dict[str, Any] | None]:
     """解析工具调用的访问上下文；不允许时返回错误结构。
 
@@ -60,7 +61,7 @@ async def resolve_tool_access(
     persona_id = (
         await get_persona_id(plugin_context, event) if use_persona_filtering else None
     )
-    recall_session_id = resolve_memory_scope(config_manager, event)
+    recall_session_id = (resolve_memory_read_scope if federated else resolve_memory_scope)(config_manager, event)
     return event, recall_session_id, persona_id, None
 
 

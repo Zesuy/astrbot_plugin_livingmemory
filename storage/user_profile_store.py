@@ -76,6 +76,7 @@ class UserProfileStoreMixin:
                     continue
                 op = dict(original)
                 op.pop("_identity_bound", None)
+                op.pop("_alias_transfer", None)
                 target = user_id
                 if op.get("op") in IDENTITY_ACTIONS:
                     if not all(isinstance(op.get(key), str) for key in ("source_uid", "quote", "val")):
@@ -123,7 +124,7 @@ class UserProfileStoreMixin:
                         for owner, previous in owners.items():
                             if owner == target:
                                 continue
-                            removal = dict(op, op="remove_alias", target_user_id=owner)
+                            removal = dict(op, op="remove_alias", target_user_id=owner, _alias_transfer=True)
                             profiles[owner] = apply_operations(previous, [removal], sources, owner)
                 bound.setdefault(target, []).append(op)
             for target, ops in bound.items():

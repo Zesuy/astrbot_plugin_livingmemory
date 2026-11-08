@@ -17,6 +17,7 @@ from ...storage.atom_store import AtomStore
 from ..memory_transfer import memory_import_key
 from ..memory_scope import (
     adapter_sql,
+    scope_matches,
     adapter_visible,
     current_adapter_access,
     infer_adapter_id,
@@ -399,7 +400,7 @@ class MemoryEngineCrudMixin:
         self,
         query: str,
         k: int = 5,
-        session_id: str | None = None,
+        session_id: str | tuple[str, ...] | list[str] | None = None,
         persona_id: str | None = None,
     ) -> list[HybridResult]:
         """
@@ -436,6 +437,7 @@ class MemoryEngineCrudMixin:
         # 如果session_id是unified_msg_origin格式，自动触发旧数据迁移
         if (
             session_id
+            and isinstance(session_id, str)
             and ":" in session_id
             and not session_id.startswith("livingmemory:")
         ):
@@ -484,7 +486,7 @@ class MemoryEngineCrudMixin:
                     metadata = safe_json_dict(document.get("metadata"))
                     if (
                         session_id is not None
-                        and metadata.get("session_id") != session_id
+                        and not scope_matches(metadata.get("session_id"), session_id)
                     ):
                         continue
                     if (

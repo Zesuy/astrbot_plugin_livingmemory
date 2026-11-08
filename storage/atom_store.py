@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any
 
+from ..core.memory_scope import scope_sql
 from ..core.memory_scope import adapter_sql
 
 import aiosqlite
@@ -247,7 +248,7 @@ class AtomStore:
         self,
         query: str,
         limit: int = 20,
-        session_id: str | None = None,
+        session_id: str | tuple[str, ...] | list[str] | None = None,
         persona_id: str | None = None,
         include_expired: bool = False,
     ) -> list[MemoryAtom]:
@@ -274,8 +275,9 @@ class AtomStore:
         if not include_expired:
             params.append(time.time())
         if session_id is not None:
-            filters.append("ma.session_id = ?")
-            params.append(session_id)
+            predicate, scope_params = scope_sql("ma.session_id", session_id)
+            filters.append(predicate)
+            params.extend(scope_params)
         if persona_id is not None:
             filters.append("ma.persona_id = ?")
             params.append(persona_id)
@@ -316,13 +318,13 @@ class AtomStore:
                 if not include_expired:
                     like_params_full.append(time.time())
                 session_filter = (
-                    "AND ma.session_id = ?" if session_id is not None else ""
+                    "AND " + scope_sql("ma.session_id", session_id)[0] if session_id is not None else ""
                 )
                 persona_filter = (
                     "AND ma.persona_id = ?" if persona_id is not None else ""
                 )
                 if session_id is not None:
-                    like_params_full.append(session_id)
+                    like_params_full.extend(scope_sql("ma.session_id", session_id)[1])
                 if persona_id is not None:
                     like_params_full.append(persona_id)
                 like_params_full.extend(ownership_params)
