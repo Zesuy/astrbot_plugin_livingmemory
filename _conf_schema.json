@@ -477,10 +477,15 @@
         }
     },
     "filtering_settings": {
-        "invisible": true,
-        "description": "记忆隔离设置",
+        "description": "记忆隔离与群聊互通",
         "type": "object",
         "items": {
+            "shared_group_scopes": {
+                "description": "互通群聊组",
+                "hint": "每行填写一组互通的群号（逗号或空格分隔），例如：530216971, 909660891。同组群聊无缝共享长期记忆、群友立体档案与聊天原文档案。",
+                "type": "text",
+                "default": ""
+            },
             "use_persona_filtering": {
                 "description": "按人格隔离记忆",
                 "hint": "开启后只召回与当前人格相关的记忆，不同人格的记忆互不干扰。",
@@ -508,12 +513,6 @@
             "isolated_sessions": {
                 "description": "强制隔离会话",
                 "hint": "每行填写一个完整会话 ID。这些会话始终使用独立记忆作用域，不受 user、global 或旧版关闭会话过滤设置影响。",
-                "type": "text",
-                "default": ""
-            },
-            "shared_group_scopes": {
-                "description": "互通群聊组",
-                "hint": "每行填写一组互通的群号（逗号或空格分隔），例如：530216971, 909660891。仅同一适配器内联合读取；写入与旁听仍按各群独立。群组不可重叠，强制隔离优先。",
                 "type": "text",
                 "default": ""
             },
