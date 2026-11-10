@@ -503,3 +503,40 @@ def test_archive_default_enabled_but_explicit_opt_out_preserved():
     runtime = ArchiveRuntime.__new__(ArchiveRuntime)
     runtime.config = config
     assert runtime.enabled is False
+
+
+@pytest.mark.asyncio
+async def test_person_history_spans_early_sparse_and_recent_dense_activity(store):
+    await store.archive_record(record("early", "早期共同经历", stamp=NOW-180*86400))
+    for index in range(430):
+        await store.archive_record(record(f"recent-{index}", "近期闲聊", stamp=NOW-1000+index))
+    await store.archive_record(record("unrelated", "旁人经历", person="other", stamp=NOW-90*86400))
+    result = await ArchiveQueryService(store).query(conversation="qq:group:1", requester="reader",
+        question="是否记得这位群友", mode="person_history", person="u1", now=NOW, page_size=3)
+    messages = result["messages"]
+    assert "early" in {row["source_uid"] for row in messages}
+    assert "recent-429" in {row["source_uid"] for row in messages}
+    assert "unrelated" not in {row["source_uid"] for row in messages}
+    assert all(row["sender_id"] == "u1" for row in messages)
+    assert result["resolved_query"]["keywords_used"] is False
+    assert result["processing_coverage"]["bounded_candidates"]
+
+
+@pytest.mark.asyncio
+async def test_bot_history_marked_by_role_or_dynamic_self_id_including_read(store):
+    first = record("assistant", "助手的过去猜测", person="legacy-bot")
+    first.role = "assistant"
+    await store.archive_record(first)
+    await store.archive_record(record("echo", "平台回显", person="self-account"))
+    await store.archive_record(record("human", "人类发言"))
+    service = ArchiveQueryService(store)
+    result = await service.query(conversation="qq:group:1", requester="reader", question="查原文",
+        mode="time_read", time_range="今天", now=NOW, self_id="self-account", page_size=100)
+    rows = {row["source_uid"]: row for row in result["messages"]}
+    marker = "【Bot历史回答，非事实依据】"
+    assert rows["assistant"]["text"].startswith(marker)
+    assert rows["echo"]["text"].startswith(marker)
+    assert not rows["human"]["text"].startswith(marker)
+    expanded = await service.query(conversation="qq:group:1", requester="reader", question="展开",
+        mode="read", evidence_handle=rows["echo"]["evidence_handle"])
+    assert expanded["messages"][0]["text"].startswith(marker)

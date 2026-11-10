@@ -222,13 +222,6 @@ def apply_operations(profile, operations, sources, user_id):
 
 
 def format_profile(profile, speaker):
-    rows = []
-    for slot, label in {**SINGLE_SLOTS, **SET_SLOTS}.items():
-        value = profile.get("single_slots", {}).get(slot)
-        items = [value] if value else profile.get("set_slots", {}).get(slot, [])
-        if items:
-            values = [" ".join(f["val"].split()) for f in items]
-            rows.append(f"- {label}: " + ", ".join(values))
     name = " ".join(str(speaker).split())[:60]
     identity = profile.get("identity", {})
     preferred, real = identity.get("preferred_name"), identity.get("real_name")
@@ -242,7 +235,7 @@ def format_profile(profile, speaker):
         details.append("别称: " + ", ".join(f["val"] for f in aliases))
     if details:
         name += " (" + ", ".join(details) + ")"
-    return f"[说话人档案: {name}]\n" + "\n".join(rows) if rows or preferred or details else ""
+    return name if preferred or details else ""
 
 
 async def resolve_member(scope_id, token, store, *, include_archive=True):

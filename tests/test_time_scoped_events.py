@@ -167,7 +167,8 @@ async def test_old_injection_and_recall_do_not_route_time_questions_to_events(mo
     conversation.get_context=AsyncMock(return_value=[])
     recall=MemoryRecall(Mock(),config,engine,conversation,MessageUtils(config,conversation),InjectionAdapter())
     await recall.handle_memory_recall(event,request)
-    assert request.extra_user_content_parts==[]
+    assert len(request.extra_user_content_parts) == 1
+    assert "[当前会话]" in request.extra_user_content_parts[0].text
     engine.recall_events_window.assert_not_awaited()
     tool=MemorySearchTool(context=Mock(),config_manager=config,memory_engine=engine)
     result=json.loads(await tool.call(SimpleNamespace(context=SimpleNamespace(event=event)),'昨晚发生什么'))

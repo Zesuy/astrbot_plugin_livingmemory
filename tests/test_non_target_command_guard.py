@@ -53,9 +53,9 @@ ASTRBOT_COMMANDS = [
 def test_complete_stock_commands_with_own_mentions(text, mention_position):
     parts = [Plain("  " + text + "  ")]
     if mention_position in ("prefix", "both"):
-        parts[:0] = [Plain(" "), At("123456"), Plain(" ")]
+        parts[:0] = [Plain(" "), At(qq="123456"), Plain(" ")]
     if mention_position in ("suffix", "both"):
-        parts.extend([Plain(" "), At(123456), Plain(" ")])
+        parts.extend([Plain(" "), At(qq=123456), Plain(" ")])
     assert non_target_command(_event("@A鼠鼠0号 " + text, parts=parts)) == text
 
 
@@ -65,11 +65,11 @@ def test_natural_language_and_astrbot_commands_are_preserved(text):
 
 
 def test_only_own_boundary_mentions_are_removed():
-    assert non_target_command(_event("", parts=[At("999"), Plain("/图 D005")])) is None
-    assert non_target_command(_event("", parts=[Plain("/图 "), At("123456"), Plain("D005")])) is None
+    assert non_target_command(_event("", parts=[At(qq="999"), Plain("/图 D005")])) is None
+    assert non_target_command(_event("", parts=[Plain("/图 "), At(qq="123456"), Plain("D005")])) is None
 
 
-@pytest.mark.parametrize("component", [Image(), Reply("123"), At("999")])
+@pytest.mark.parametrize("component", [Image(file="test.png"), Reply(id="123"), At(qq="999")])
 def test_mixed_content_is_not_flattened_to_a_command(component):
     assert non_target_command(_event("/图 D005", parts=[Plain("/图 D005"), component])) is None
 
@@ -88,7 +88,7 @@ async def test_hook_stops_event_before_any_archive_or_recall_work(text, caplog):
     plugin.archive_runtime = Mock()
     plugin._ensure_plugin_ready = AsyncMock()
     plugin.event_handler = Mock(handle_memory_recall=AsyncMock())
-    event = _event("@A鼠鼠0号 " + text, parts=[At("123456"), Plain(" " + text)])
+    event = _event("@A鼠鼠0号 " + text, parts=[At(qq="123456"), Plain(" " + text)])
     request = SimpleNamespace(prompt=text)
 
     with caplog.at_level("INFO"):

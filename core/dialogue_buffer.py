@@ -10,6 +10,13 @@ from itertools import count
 _EVENT_IDS = count()
 
 
+def sanitize_display_name(name: str, max_length: int = 24) -> str:
+    """Render one bounded name, escaping delimiters reserved by context framing."""
+    text = "".join(c for c in str(name or "") if c.isprintable())
+    text = " ".join(text.split()).translate(str.maketrans("[]():<>", "［］（）：＜＞"))
+    return (text or "群友")[:max(1, max_length)]
+
+
 @dataclass(frozen=True)
 class DialogueEntry:
     message_id: str | None
@@ -17,6 +24,12 @@ class DialogueEntry:
     sender_name: str
     sender_id: str
     content: str
+    role: str = "user"
+    mention_ids: tuple[str, ...] = ()
+    reply_sender_id: str | None = None
+    reply_text: str | None = None
+    is_reply_to_self: bool = False
+    reply_sender_name: str | None = None
 
     @property
     def formatted_time(self) -> str:
@@ -39,6 +52,8 @@ class DialogueBuffer:
         content,
         message_id=None,
         timestamp=None,
+        *, role="user", mention_ids=(), reply_sender_id=None, reply_text=None,
+        is_reply_to_self=False, reply_sender_name=None,
     ):
         if not session_id or not isinstance(content, str) or not content.strip():
             return
@@ -64,6 +79,8 @@ class DialogueBuffer:
                 str(sender_name or sender_id),
                 str(sender_id),
                 content.strip()[:2000],
+                role, tuple(str(uid) for uid in mention_ids), reply_sender_id,
+                reply_text, is_reply_to_self, reply_sender_name,
             )
         )
         while len(self._sessions) > self.max_sessions:
@@ -90,12 +107,18 @@ class DialogueBuffer:
         if not entries:
             return ""
         lines = ["[群聊近况]"]
-        previous_time = None
+        def label(value, limit=24):
+            return "".join(c for c in str(value or "") if c.isprintable())[:limit]
+
         for entry in entries:
-            if entry.formatted_time != previous_time:
-                lines.append(entry.formatted_time)
-                previous_time = entry.formatted_time
-            lines.append(f"[{entry.sender_name}]: {entry.content}")
+            content = entry.content
+            if entry.mention_ids:
+                content += " " + " ".join("@" + label(uid, None) for uid in entry.mention_ids)
+            if entry.reply_sender_id or entry.reply_text:
+                name = sanitize_display_name(entry.reply_sender_name or entry.reply_sender_id)
+                own = "(你)" if entry.is_reply_to_self else ""
+                content += f" [引用 >>> {name}{own}(ID:{label(entry.reply_sender_id, None)}): {label(entry.reply_text, 30)}]"
+            lines.append(f"[{entry.formatted_time}] {sanitize_display_name(entry.sender_name)}(ID:{label(entry.sender_id, None)}): {content}")
         return "\n".join(lines)
 
     def clear(self, session_id=None):

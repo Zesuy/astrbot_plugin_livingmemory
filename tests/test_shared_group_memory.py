@@ -125,11 +125,11 @@ async def test_profile_inheritance_epoch_vector_and_unlink(store, clear_scope):
     recall = MemoryRecall(None, cfg, None, SimpleNamespace(store=store), None, InjectionAdapter())
     req = SimpleNamespace(extra_user_content_parts=[])
     recall._inject_clean_context(ev, req, [], "")
-    assert "Linux" in req.extra_user_content_parts[0].text
+    assert "Linux" not in req.extra_user_content_parts[0].text
     await store.clear_archive(clear_scope)
     req.extra_user_content_parts.clear()
     recall._inject_clean_context(ev, req, [], "")
-    assert not req.extra_user_content_parts
+    assert "[当前会话]" in req.extra_user_content_parts[0].text
     unlinked = UserProfileRuntime(SimpleNamespace(store=store, config=config(""), enabled=True,
         authorized=AsyncMock(return_value=True)))
     assert not (await unlinked.profile_for_event(event()))["set_slots"]

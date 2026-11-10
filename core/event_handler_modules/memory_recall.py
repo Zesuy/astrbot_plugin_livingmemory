@@ -361,7 +361,10 @@ class MemoryRecall:
                 profile = None
         corrections = event.get_extra("_lm_alias_corrections", None)
         text = CleanContextInjector.format_context(dialogue, memories, speaker, profile=profile,
-                                                   corrections=corrections)
+                                                   corrections=corrections, self_id=str(event.get_self_id()),
+                                                   current_scope=str(event.unified_msg_origin),
+                                                   permitted_scopes=resolve_group_read_scopes(self.config_manager, event),
+                                                   speaker_id=str(event.get_sender_id()))
         if text:
             part = TextPart(text=text).mark_as_temp()
             # Ownership is private runtime metadata, never added to the model text.

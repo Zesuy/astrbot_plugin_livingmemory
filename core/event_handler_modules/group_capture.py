@@ -63,11 +63,41 @@ class GroupCapture:
                 "dialogue_buffer.enabled", True
             ):
                 # Plain components only: quoted text and attachment descriptions stay out.
-                from astrbot.core.message.components import Plain
+                from astrbot.core.message.components import Plain, At, Reply
 
-                content = "".join(
-                    c.text for c in event.get_messages() if isinstance(c, Plain)
-                )
+                components = event.get_messages()
+                content = "".join(c.text for c in components if isinstance(c, Plain))
+                mentions = []
+                reply_info = {}
+                for component in components:
+                    # Relationships are optional metadata. A broken adapter component
+                    # must never prevent capture of the independent Plain body.
+                    try:
+                        if isinstance(component, At):
+                            target = getattr(component, "qq", None)
+                            if target in (None, ""):
+                                target = getattr(component, "target", None)
+                            if isinstance(target, (str, int)) and not isinstance(target, bool) and str(target).strip():
+                                mentions.append(str(target))
+                        elif isinstance(component, Reply):
+                            sender = getattr(component, "sender_id", None)
+                            sender = str(sender) if isinstance(sender, (str, int)) and not isinstance(sender, bool) and sender != "" else None
+                            chain = getattr(component, "chain", None)
+                            chain = chain if isinstance(chain, (list, tuple)) else ()
+                            quoted = "".join(c.text for c in chain if isinstance(c, Plain) and isinstance(c.text, str))
+                            if not quoted:
+                                quoted = getattr(component, "message_str", "")
+                            quoted = quoted if isinstance(quoted, str) else ""
+                            nickname = getattr(component, "sender_nickname", None)
+                            reply_info = dict(reply_sender_id=sender, reply_text=quoted[:30],
+                                reply_sender_name=nickname if isinstance(nickname, str) else None,
+                                is_reply_to_self=sender is not None and sender == str(event.get_self_id()))
+                    except Exception as exc:
+                        logger.debug("Ignoring malformed dialogue relationship: %s", type(exc).__name__)
+                if not content.strip() and mentions:
+                    content = "[提及]"
+                if not content.strip() and reply_info:
+                    content = "[回复]"
                 self.dialogue_buffer.add_message(
                     event.unified_msg_origin,
                     event.get_sender_name(),
@@ -75,6 +105,7 @@ class GroupCapture:
                     content,
                     message_id=dialogue_event_id(event),
                     timestamp=getattr(event.message_obj, "timestamp", None),
+                    mention_ids=tuple(dict.fromkeys(mentions)), **reply_info,
                 )
             if not self.config_manager.get(
                 "session_manager.enable_full_group_capture", True

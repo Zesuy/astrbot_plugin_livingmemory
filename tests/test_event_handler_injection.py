@@ -47,7 +47,7 @@ def test_clean_context_logs_full_injected_text(handler):
     assert part._no_save is True
     assert dialogue in part.text
     assert memories[0]["content"] in part.text
-    assert "【证据边界与回答准则】" in part.text
+    assert "【交互事实与回忆认知契约】" in part.text
     logger.info.assert_called_once_with(
         f"[{event.unified_msg_origin}] 本轮记忆注入就绪 ({len(part.text)} 字符):\n{part.text}"
     )
@@ -66,11 +66,11 @@ def test_clean_context_logs_when_nothing_is_injected(handler):
         handler._memory_recall._inject_clean_context(event, req, [])
 
     handler._memory_recall._get_dialogue_context.assert_called_once_with(event)
-    assert req.extra_user_content_parts == []
-    logger.info.assert_not_called()
-    logger.debug.assert_called_once_with(
-        f"[{event.unified_msg_origin}] 本轮未注入记忆内容"
-    )
+    assert len(req.extra_user_content_parts) == 1
+    assert "[当前会话]" in req.extra_user_content_parts[0].text
+    logger.info.assert_called_once()
+    logger.debug.assert_not_called()
+
 
 
 # ==================== fake_tool_call 兼容清理测试 ====================
@@ -706,9 +706,11 @@ async def test_top_k_0_cleans_livingmemory_temp_extra_parts(
 
     await handler.handle_memory_recall(event, req)
 
-    assert len(req.extra_user_content_parts) == 1
+    assert len(req.extra_user_content_parts) == 2
     assert req.extra_user_content_parts[0].text == "<image_caption>cat</image_caption>"
     memory_engine.search_memories.assert_not_awaited()
+
+    assert "[当前会话]" in req.extra_user_content_parts[1].text
 
 
 @pytest.mark.asyncio

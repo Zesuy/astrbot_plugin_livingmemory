@@ -298,13 +298,15 @@ async def test_wakeup_injection_and_clear_before_format(store):
     req = SimpleNamespace(extra_user_content_parts=[])
     recall._inject_clean_context(ev, req, [{"content": "周末约好爬山"}], "[群聊近况]\n在聊设备")
     text = req.extra_user_content_parts[0].text
-    assert "[说话人档案: 张三]\n- 喜好/偏好: Linux" in text
+    assert "说话人档案" not in text
+    assert "Linux" not in text
     assert "[群聊近况]" in text and "[长期记忆与历史事件]" in text
     assert req.extra_user_content_parts[0]._no_save
     await store.clear_archive("group:a")
     req.extra_user_content_parts.clear()
     recall._inject_clean_context(ev, req, [])
-    assert not req.extra_user_content_parts
+    assert "Linux" not in req.extra_user_content_parts[0].text
+    assert "[当前会话]" in req.extra_user_content_parts[0].text
 
 
 @pytest.mark.asyncio
@@ -322,7 +324,7 @@ async def test_disabled_private_or_unauthorized_profile_is_not_read(store):
 
 
 def test_empty_profile_does_not_add_context():
-    assert CleanContextInjector.format_context(profile=empty_profile(), speaker="张三") == ""
+    assert "【交互事实与回忆认知契约】" in CleanContextInjector.format_context(profile=empty_profile(), speaker="张三")
 
 
 @pytest.mark.asyncio

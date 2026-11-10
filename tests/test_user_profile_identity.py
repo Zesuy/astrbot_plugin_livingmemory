@@ -30,7 +30,7 @@ async def test_real_name_and_preferred_name_latest_timestamp(store):
     profile = (await store.get_user_profile("group:a", "100"))["profile"]
     assert profile["identity"]["preferred_name"]["val"] == "老张"
     assert profile["identity"]["real_name"]["author_id"] == "100"
-    assert "老张 (真名: 张伟)" in CleanContextInjector.format_context(profile=profile)
+    assert "老张 （真名： 张伟）" in CleanContextInjector.format_context(profile=profile)
 
 
 @pytest.mark.asyncio

@@ -157,17 +157,53 @@ class ArchiveQueryService:
             terms = [t for t in terms if len(t)>1]
         return terms[:24]
 
+    async def _stratified_candidates(self, conn, where, params, limit):
+        """Bounded evidence across the actual active span, including both endpoints."""
+        clock = "COALESCE(sent_at,saved_at)"
+        span = (await conn.execute_fetchall(
+            f"SELECT MIN({clock}),MAX({clock}),COUNT(*) FROM archive_messages WHERE " + where, params))[0]
+        if not span[2]:
+            return [], False
+        low, high, total = span
+        if low is None:
+            rows = await conn.execute_fetchall("SELECT * FROM archive_messages WHERE " + where + " ORDER BY id LIMIT ?", [*params, limit])
+            return rows, total > limit
+        rows = []
+        buckets = []
+        groups = []
+        strata = min(8, max(1, limit // 2))
+        for bucket in range(strata):
+            left = low + (high-low)*bucket/strata
+            right = low + (high-low)*(bucket+1)/strata
+            bucket_where = where + f" AND {clock}>=? AND {clock}" + ("<=?" if bucket == strata-1 else "<?")
+            args = [*params, left, right]
+            count = (await conn.execute_fetchall("SELECT COUNT(*) FROM archive_messages WHERE " + bucket_where, args))[0][0]
+            if count:
+                buckets.append((bucket_where, args, count))
+        for index, (bucket_where, args, count) in enumerate(buckets):
+            quota = limit // len(buckets) + (index < limit % len(buckets))
+            positions = sorted({1 + (count-1)*i//max(1, min(count,quota)-1) for i in range(min(count,quota))})
+            if not positions:
+                continue
+            group = await conn.execute_fetchall(
+                f"SELECT * FROM (SELECT *,ROW_NUMBER() OVER (ORDER BY {clock},id) AS sample_rank FROM archive_messages WHERE " + bucket_where + ") WHERE sample_rank IN (" + ",".join("?" for _ in positions) + ") ORDER BY sample_rank", [*args,*positions])
+            groups.append(group[:1] + group[-1:] + group[1:-1] if len(group)>1 else group)
+        # Round-robin strata and endpoints so the first page spans early and recent history.
+        rows = [group[offset] for offset in range(max(map(len,groups),default=0))
+                for group in groups if offset<len(group)]
+        return rows, total > len(rows)
+
     async def query(self, *, conversation, requester, question="", mode="lookup",
                     person="", person_role="about", keywords=None, time_range="",
                     start="", end="", cursor="", evidence_handle="", page_size=40,
-                    now=None, exclude_uid="", read_scopes=None):
+                    now=None, exclude_uid="", read_scopes=None, self_id=""):
         self.calls += 1
         scopes = tuple(sorted(set(read_scopes or (conversation,))))
         if len(question)>4000 or len(person)>200 or len(keywords or [])>24 or any(not isinstance(k,str) or len(k)>160 for k in keywords or []):
             return {"status":"error","error":"query input exceeds bounded tool limits"}
         now = time.time() if now is None else now
         page_size = max(1,min(100,int(page_size)))
-        if mode not in {"lookup","time_read","read","overview","style_sample"} or person_role not in {"speaker","about","any"}:
+        if mode not in {"lookup","time_read","read","overview","style_sample","person_history"} or person_role not in {"speaker","about","any"}:
             return {"status":"error","error":"unsupported mode or person_role"}
         token = cursor or evidence_handle
         read_offset,text_offset,page_offset = 0,0,0
@@ -244,9 +280,9 @@ class ArchiveQueryService:
                         'note':'Cannot inspect activity for an unresolved person. Supply an account ID or omit person for a group overview.'}
             terms = self._terms(question,keywords or [],accounts) if mode=="lookup" else []
             ids = [a["account_id"] for a in accounts]
-            if mode=='style_sample':
+            if mode in {'style_sample','person_history'}:
                 if not person or len(ids)!=1:
-                    return {'status':'ambiguous','resolved_query':resolved,'note':'style_sample requires one explicit, resolved person/account; no nickname guessing'}
+                    return {'status':'ambiguous','resolved_query':resolved,'note':'person sampling requires one explicit, resolved person/account; no nickname guessing'}
                 person_role = resolved['person_role'] = 'speaker'
             scope_conditions = []
             params = []
@@ -278,6 +314,11 @@ class ArchiveQueryService:
                     page_size,self.max_candidates)
                 bounded = sampling['candidate_scan_bounded']
                 resolved['keywords_used'] = False
+            elif mode=='person_history':
+                rows,bounded = await self._stratified_candidates(conn,where,params,min(self.max_candidates,100))
+                for row in rows:
+                    hit_reasons[row['uid']] = ['author','cross_time_person_history']
+                resolved['keywords_used'] = False
             elif mode=="time_read":
                 rows = await conn.execute_fetchall("SELECT * FROM archive_messages WHERE "+where+" ORDER BY COALESCE(sent_at,saved_at),id LIMIT ?",[*params,self.max_results+1])
                 bounded = len(rows)>self.max_results
@@ -291,13 +332,12 @@ class ArchiveQueryService:
                     literals = ["instr(lower(text),lower(?))>0" for _ in terms]
                     literal_person = " AND instr(text,?)>0" if unresolved_person else ""
                     literal_args = [person] if unresolved_person else []
-                    anchors = await conn.execute_fetchall("SELECT * FROM archive_messages WHERE "+where+" AND ("+" OR ".join(literals)+")"+literal_person+" ORDER BY COALESCE(sent_at,saved_at) DESC,id DESC LIMIT ?",[*params,*terms,*literal_args,self.max_candidates+1])
-                    bounded = len(anchors)>self.max_candidates
+                    anchors, bounded = await self._stratified_candidates(conn, where+" AND ("+" OR ".join(literals)+")"+literal_person, [*params,*terms,*literal_args], self.max_candidates)
                     for row in anchors[:self.max_candidates]:
                         candidates[row["uid"]] = row
                 if ids:
-                    related = await conn.execute_fetchall("SELECT * FROM archive_messages WHERE "+where+" AND (sender_id IN("+",".join("?" for _ in ids)+") OR EXISTS(SELECT 1 FROM json_each(archive_messages.mentions) WHERE value IN("+",".join("?" for _ in ids)+")) OR EXISTS(SELECT 1 FROM json_each(archive_messages.components) WHERE json_extract(value,'$.type')='tool_output' AND json_extract(value,'$.trigger_sender_id') IN("+",".join("?" for _ in ids)+"))) ORDER BY COALESCE(sent_at,saved_at) DESC,id DESC LIMIT ?",[*params,*ids,*ids,*ids,self.max_candidates+1])
-                    bounded = bounded or len(related)>self.max_candidates
+                    related, related_bounded = await self._stratified_candidates(conn, where+" AND (sender_id IN("+",".join("?" for _ in ids)+") OR EXISTS(SELECT 1 FROM json_each(archive_messages.mentions) WHERE value IN("+",".join("?" for _ in ids)+")) OR EXISTS(SELECT 1 FROM json_each(archive_messages.components) WHERE json_extract(value,'$.type')='tool_output' AND json_extract(value,'$.trigger_sender_id') IN("+",".join("?" for _ in ids)+")))", [*params,*ids,*ids,*ids], self.max_candidates)
+                    bounded = bounded or related_bounded
                     for row in related[:self.max_candidates]:
                         candidates[row["uid"]] = row
                 ranked = []
@@ -323,7 +363,7 @@ class ArchiveQueryService:
                     if any(n in body for n in names):
                         reasons.append("literal_name_mention")
                     hit_reasons[row["uid"]] = reasons
-                    score = 8*len(matches)+(12 if person_hit else 0)-(2 if row["role"]=="assistant" else 0)
+                    score = 8*len(matches)+(12 if person_hit else 0)-(20 if row["role"]=="assistant" or (self_id and row["sender_id"]==self_id) else 0)
                     ranked.append((score,row["id"],row))
                 ranked.sort(key=lambda x:(-x[0],-x[1]))
                 bounded = bounded or len(ranked)>24
@@ -364,7 +404,7 @@ class ArchiveQueryService:
                         "scopes":scopes,"states":states,"expires":time.monotonic()+900,
                         "position":0,"delivered":set(),"rows":[(r["uid"],r["revision"]) for r in rows],
                         "reasons":hit_reasons,"resolved":resolved,"available":available,
-                        "bounded":bounded,"low":low,"high":high,"sampling":sampling}
+                        "self_id":self_id,"bounded":bounded,"low":low,"high":high,"sampling":sampling}
             while len(self.snapshots)>=self.max_sessions:
                 self.snapshots.popitem(last=False)
             self.snapshots[token] = snapshot
@@ -390,6 +430,7 @@ class ArchiveQueryService:
                     return {"status":"invalidated","reason":"source_revision_changed"}
                 row = rows[0]
                 text = row["text"]
+                prefix = "【Bot历史回答，非事实依据】" if row["role"]=="assistant" or (snapshot.get("self_id") and row["sender_id"]==snapshot["self_id"]) else ""
                 own,quotes = author_parts(row) if snapshot.get('sampling') else (None,[])
                 projection = 'original'
                 if snapshot['resolved']['mode']=='style_sample' and not full:
@@ -401,7 +442,7 @@ class ArchiveQueryService:
                 quotes_truncated = len(quotes)>2 or any(len(q)>quote_limit for q in quotes[:2])
                 quotes = [q[:quote_limit] for q in quotes[:2]]
                 auxiliary_chars = (len(own[:own_limit]) if own else 0) + sum(map(len,quotes))
-                limit = min(max(0,len(text)-text_offset),max(0,self.result_chars-used-auxiliary_chars),
+                limit = min(max(0,len(text)-text_offset),max(0,self.result_chars-used-auxiliary_chars-len(prefix)),
                             10000 if full else min(600,max(1,allocation-auxiliary_chars)) if snapshot.get('sampling') else 2000)
                 if limit <= 0 and len(text)>text_offset:
                     break
@@ -411,7 +452,7 @@ class ArchiveQueryService:
                     "next_text_handle":snapshot["token"]+":"+str(index)+":"+str(next_offset) if next_offset<len(text) else None,"text_offset":text_offset,"sender_id":row["sender_id"],
                     "empty_text":not text,
                     "sender_name":row["nickname"],"role":row["role"],"time":datetime.fromtimestamp(clock,TZ).isoformat() if clock else None,
-                    "time_quality":row["time_quality"],"source_state":row["state"],"text":text[text_offset:next_offset],"truncated":len(text)>next_offset,
+                    "time_quality":row["time_quality"],"source_state":row["state"],"text":prefix + text[text_offset:next_offset],"truncated":len(text)>next_offset,
                     "hit_reasons":snapshot["reasons"].get(uid,[]),"mentions":json.loads(row["mentions"]),
                     "context_only":bool("person_context_candidate" in snapshot["reasons"].get(uid,[]) or (snapshot["low"] is not None and (clock is None or not snapshot["low"]<=clock<snapshot["high"])) or
                         (snapshot["resolved"]["person_role"]=="speaker" and snapshot["resolved"]["accounts"] and row["sender_id"] not in [a["account_id"] for a in snapshot["resolved"]["accounts"]])),
@@ -427,7 +468,7 @@ class ArchiveQueryService:
                     # Plain projection. Original read has its own continuation.
                     if projection!='original':
                         messages[-1]['next_text_handle']=None
-                used += limit + auxiliary_chars
+                used += limit + auxiliary_chars + len(prefix)
         if not await self._snapshot_valid(self.store.read_connection, snapshot):
             return {"status":"invalidated","reason":"changed_before_publish"}
         position = offset+len(messages)

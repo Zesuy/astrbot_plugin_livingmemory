@@ -32,6 +32,7 @@ class ChatEventsTool(FunctionTool[AstrAgentContext]):
         "For open-ended daily reports, catching up or what happened while someone was quiet, use mode=overview with the original question and time_range/start/end; do not guess topic keywords first. "
         "overview samples contiguous discussions across the whole window and returns density; supply person=我 for the requester's no-post activity timeline. This is evidence scouting, not all-topic coverage. "
         "For imitating a specific member's speech use mode=style_sample with person=their account/nickname (person=我 binds the current requester); it returns diverse author_plain examples with quotes separated. "
+        "For remembering a person or shared experiences across months, use person_history with person; it samples across their full active history without guessed keywords. "
         "Generic fictional or occupational styles do not require a person lookup. "
         "lookup checks known topics; time_read reads a chosen chronological window after overview when more context is needed. "
         "person_role=speaker means messages authored by that account; about means discussed person and must not filter by author. "
@@ -48,7 +49,7 @@ class ChatEventsTool(FunctionTool[AstrAgentContext]):
     )
     parameters: dict = field(default_factory=lambda:{"type":"object","properties":{
         "query":{"type":"string","description":"用户原始历史问题；保留人物、时间及具体话题。"},
-        "mode":{"type":"string","enum":["lookup","time_read","read","overview","style_sample"],"default":"lookup","description":"overview=时段群聊概览，未知话题先取样；style_sample=模仿具体群友前获取本人语料；lookup=按关键词查话题；time_read=按时间顺着上下文读某段讨论（可按作者筛选）；read=展开原文。"},
+        "mode":{"type":"string","enum":["lookup","time_read","read","overview","style_sample","person_history"],"default":"lookup","description":"person_history=人物跨时间历史取样（需指定person，覆盖全部活跃跨度）；overview=时段群聊概览，未知话题先取样；style_sample=模仿具体群友前获取本人语料；lookup=按关键词查话题；time_read=按时间顺着上下文读某段讨论（可按作者筛选）；read=展开原文。"},
         "person":{"type":"string","description":"可选人物昵称或账号ID；我=当前提问者，你=机器人。查询某人说的话须同时指定 person_role=speaker；省略则查全会话。style_sample必填；overview只查看该人物活动时间线，不过滤作者。"},
         "person_role":{"type":"string","enum":["speaker","about","any"],"default":"about","description":"speaker=该人亲口说的；about=提到或讨论该人的，含他人发言；any=相关人物线索。问某人说了什么用speaker。"},
         "keywords":{"type":"array","items":{"type":"string"},"description":"可选关键词列表，如 [跑团,角色卡]；用于lookup搜索讨论话题或词汇，不把人物昵称当话题。无关键词查某人发言可用time_read。"},
@@ -84,7 +85,7 @@ class ChatEventsTool(FunctionTool[AstrAgentContext]):
                     requester=str(event.get_sender_id()),question=query,mode=mode,person=person,
                     person_role=person_role,keywords=keywords,time_range=time_range,start=start,end=end,
                     cursor=cursor,evidence_handle=evidence_handle,page_size=page_size,
-                    exclude_uid=exclude_uid),timeout=20)
+                    exclude_uid=exclude_uid,self_id=str(event.get_self_id())),timeout=20)
             result.setdefault("archive_coverage",{}).update({"known_capture_failures":runtime.gaps})
             logger.info("[ArchiveQuery] tool-only mode=%s status=%s messages=%s",mode,result.get("status"),len(result.get("messages",[])))
             return json.dumps(result,ensure_ascii=False)

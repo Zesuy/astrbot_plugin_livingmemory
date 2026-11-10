@@ -251,8 +251,8 @@ def _install_astrbot_stubs() -> None:
     class Reply(_BaseComponent):
         type = "reply"
 
-        def __init__(self, message_str=""):
-            super().__init__(message_str=message_str)
+        def __init__(self, message_str="", **kwargs):
+            super().__init__(message_str=message_str, **kwargs)
 
     def register(*args, **kwargs):
         return lambda obj: obj
