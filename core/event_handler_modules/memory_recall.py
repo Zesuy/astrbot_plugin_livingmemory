@@ -320,9 +320,11 @@ class MemoryRecall:
                             f"{injection_method}: {fallback_reason}"
                         )
 
-                    self._inject_clean_context(event, req, memory_list, dialogue_snapshot)
+                    cross_group_ctx = await self._get_cross_group_context(event, actual_query)
+                    self._inject_clean_context(event, req, memory_list, dialogue_snapshot, cross_group_context=cross_group_ctx)
                 else:
-                    self._inject_clean_context(event, req, [], dialogue_snapshot)
+                    cross_group_ctx = await self._get_cross_group_context(event, actual_query)
+                    self._inject_clean_context(event, req, [], dialogue_snapshot, cross_group_context=cross_group_ctx)
                     logger.info(f"[{session_id}] 未找到相关记忆")
 
         except asyncio.CancelledError:
@@ -342,7 +344,74 @@ class MemoryRecall:
             )
         return dialogue
 
-    def _inject_clean_context(self, event, req, memories, dialogue=None):
+
+    async def _get_cross_group_context(self, event, query: str = "") -> str:
+        try:
+            store = getattr(self.conversation_manager, "store", None)
+            if store is None or not getattr(store, "read_connection", None):
+                return ""
+            scopes = resolve_group_read_scopes(self.config_manager, event)
+            current_scope = str(event.unified_msg_origin)
+            other_scopes = [s for s in scopes if s != current_scope]
+            if not other_scopes:
+                return ""
+
+            conn = store.read_connection
+            now = time.time()
+            sender_id = str(event.get_sender_id())
+            from ..clean_context import _format_scope_label
+            from zoneinfo import ZoneInfo
+            from datetime import datetime
+            import re
+
+            # 1. 检测同一个人 5 分钟内是否在隔壁群发过言
+            five_mins_ago = now - 300
+            placeholders = ",".join("?" for _ in other_scopes)
+            recent_user_rows = await conn.execute_fetchall(
+                f"SELECT conversation, nickname, text, sent_at FROM archive_messages "
+                f"WHERE conversation IN ({placeholders}) AND sender_id = ? "
+                f"AND COALESCE(sent_at, saved_at) >= ? "
+                f"ORDER BY COALESCE(sent_at, saved_at) DESC LIMIT 2",
+                (*other_scopes, sender_id, five_mins_ago),
+            )
+            if recent_user_rows:
+                lines = []
+                for row in recent_user_rows:
+                    dt = datetime.fromtimestamp(row[3] or now, ZoneInfo("Asia/Shanghai")).strftime("%H:%M")
+                    lines.append(f"- [{dt}] {row[1]}: \"{row[2][:120]}\"")
+                other_label = _format_scope_label(recent_user_rows[0][0], current_scope)
+                return (
+                    f"[隔壁群实时动态 · 串门提醒]\n"
+                    f"该群友刚才在{other_label}发言过：\n"
+                    + "\n".join(lines)
+                    + "\n说明：该群友刚从隔壁串门过来，你已知晓此背景，可自然承接互动调侃。"
+                )
+
+            # 2. 检测问题中是否明确提及隔壁群
+            if re.search(r"(隔壁|老群|新群|另一个群|530216971|909660891|分流群|主群)", query):
+                recent_other_rows = await conn.execute_fetchall(
+                    f"SELECT conversation, nickname, text, sent_at FROM archive_messages "
+                    f"WHERE conversation IN ({placeholders}) "
+                    f"ORDER BY COALESCE(sent_at, saved_at) DESC LIMIT 4",
+                    other_scopes,
+                )
+                if recent_other_rows:
+                    lines = []
+                    for row in reversed(recent_other_rows):
+                        dt = datetime.fromtimestamp(row[3] or now, ZoneInfo("Asia/Shanghai")).strftime("%H:%M")
+                        lines.append(f"- [{dt}] {row[1]}: \"{row[2][:120]}\"")
+                    other_label = _format_scope_label(recent_other_rows[0][0], current_scope)
+                    return (
+                        f"[隔壁群近期热聊快照 ({other_label})]\n"
+                        + "\n".join(lines)
+                        + "\n说明：群友在询问或谈及隔壁群，你已知晓隔壁现场动态，可据此自然回答。"
+                    )
+            return ""
+        except Exception as exc:
+            logger.debug("获取跨群上下文失败: %s", exc)
+            return ""
+
+    def _inject_clean_context(self, event, req, memories, dialogue=None, cross_group_context: str = ""):
         if dialogue is None:
             dialogue = self._get_dialogue_context(event)
         speaker = event.get_sender_name()
@@ -364,7 +433,7 @@ class MemoryRecall:
                                                    corrections=corrections, self_id=str(event.get_self_id()),
                                                    current_scope=str(event.unified_msg_origin),
                                                    permitted_scopes=resolve_group_read_scopes(self.config_manager, event),
-                                                   speaker_id=str(event.get_sender_id()))
+                                                   speaker_id=str(event.get_sender_id()), cross_group_context=cross_group_context)
         if text:
             part = TextPart(text=text).mark_as_temp()
             # Ownership is private runtime metadata, never added to the model text.

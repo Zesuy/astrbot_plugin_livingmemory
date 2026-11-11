@@ -58,12 +58,14 @@ class ChatEventsTool(FunctionTool[AstrAgentContext]):
         "end":{"type":"string","description":"可选精确ISO8601终点（不含），须带时区；超过当前时间自动截至现在。"},
         "cursor":{"type":"string","description":"Opaque returned cursor; continuation uses its fixed original query and scope."},
         "evidence_handle":{"type":"string","description":"Returned handle for mode=read."},
-        "page_size":{"type":"integer","default":40,"minimum":1,"maximum":100}},"required":["query"]})
+        "page_size":{"type":"integer","default":40,"minimum":1,"maximum":100},
+        "target_group":{"type":"string","enum":["current","909660891","530216971","all_shared"],"default":"current","description":"选择要查询的群聊。current=当前群现场(回看本群讨论、刚才聊了什么、日报)；909660891=老群现场；530216971=新群现场；all_shared=两群联合(用于跨群回忆某人的过往经历)。"},
+        "domain":{"type":"string","enum":["auto","social","game"],"default":"auto","description":"查询领域。auto=自动识别；social=真人日常社交(过滤修仙等游戏报表)；game=文字修仙/游戏进度(定向查询闭关、突破、灵石等游戏回执)。"}},"required":["query"]})
 
     async def call(self, context: ContextWrapper[AstrAgentContext], query: str,
                    mode="lookup", person="", person_role="about", keywords=None,
                    time_range="", start="", end="", cursor="", evidence_handle="",
-                   page_size=40) -> ToolExecResult:
+                   page_size=40, target_group="current", domain="auto") -> ToolExecResult:
         try:
             runtime = self.runtime
             if runtime is None or not runtime.ready or not runtime.enabled or not runtime.config.get("archive.query_enabled",True):
@@ -79,13 +81,23 @@ class ChatEventsTool(FunctionTool[AstrAgentContext]):
             captured = event.get_extra('_lm_archive_record',None) if hasattr(event,'get_extra') else None
             exclude_uid = getattr(captured,'uid','')
             exclude_uid = exclude_uid if isinstance(exclude_uid,str) else ''
+            allowed_scopes = resolve_group_read_scopes(runtime.config, event)
+            if target_group == "all_shared":
+                active_scopes = allowed_scopes
+            elif target_group in ("909660891", "530216971"):
+                matching = [s for s in allowed_scopes if s.endswith(":" + target_group)]
+                active_scopes = tuple(matching) if matching else (scope,)
+            else:
+                active_scopes = (scope,)
+
             with adapter_access(runtime.config, event):
                 result = await asyncio.wait_for(runtime.service.query(conversation=scope,
-                    read_scopes=resolve_group_read_scopes(runtime.config, event),
+                    read_scopes=active_scopes,
                     requester=str(event.get_sender_id()),question=query,mode=mode,person=person,
                     person_role=person_role,keywords=keywords,time_range=time_range,start=start,end=end,
                     cursor=cursor,evidence_handle=evidence_handle,page_size=page_size,
-                    exclude_uid=exclude_uid,self_id=str(event.get_self_id())),timeout=20)
+                    exclude_uid=exclude_uid,self_id=str(event.get_self_id()),
+                    domain=domain),timeout=20)
             result.setdefault("archive_coverage",{}).update({"known_capture_failures":runtime.gaps})
             logger.info("[ArchiveQuery] tool-only mode=%s status=%s messages=%s",mode,result.get("status"),len(result.get("messages",[])))
             return json.dumps(result,ensure_ascii=False)

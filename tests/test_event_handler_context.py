@@ -444,3 +444,60 @@ async def test_reflection_window_split_chooses_oldest_segment(
     assert len(storage_call.args[1]) == expected_end
 
 
+
+
+@pytest.mark.asyncio
+async def test_cross_group_chatter_detection_and_injection():
+    """Verify that a user who chatted in the old group 3 minutes ago gets a cross-group reminder in the new group."""
+    from astrbot_plugin_livingmemory.core.event_handler_modules.memory_recall import MemoryRecall
+    from astrbot_plugin_livingmemory.core.base.config_manager import ConfigManager
+    from unittest.mock import Mock, AsyncMock
+    from types import SimpleNamespace
+    import time
+
+    now = time.time()
+    cfg = ConfigManager({
+        "filtering_settings": {"shared_group_scopes": "530216971, 909660891"},
+        "recall_engine": {"injection_method": "extra_user_content"}
+    })
+
+    # 模拟数据库查询返回该用户在隔壁老群 3 分钟前的发言
+    mock_conn = AsyncMock()
+    mock_conn.execute_fetchall = AsyncMock(return_value=[
+        ("qq:GroupMessage:909660891", "四格蝶", "今天食堂这红烧肉太腻了", now - 180)
+    ])
+
+    mock_store = SimpleNamespace(read_connection=mock_conn)
+    mock_conv = SimpleNamespace(store=mock_store)
+
+    recall = MemoryRecall(
+        context=Mock(),
+        config_manager=cfg,
+        memory_engine=SimpleNamespace(search_memories=AsyncMock(return_value=[])),
+        conversation_manager=mock_conv,
+        message_utils=Mock(),
+        injection_adapter=Mock(),
+        dialogue_buffer=None
+    )
+
+    ev = SimpleNamespace(
+        unified_msg_origin="qq:GroupMessage:530216971",
+        get_sender_id=lambda: "2640719107",
+        get_sender_name=lambda: "四格蝶",
+        get_self_id=lambda: "3658276025",
+        get_message_type=lambda: 1, # GROUP_MESSAGE
+        get_extra=lambda *a, **k: None,
+        get_platform_name=lambda: "qq",
+    )
+
+    req = SimpleNamespace(
+        prompt="大家在聊啥呢",
+        extra_user_content_parts=[],
+        contexts=[],
+        system_prompt="system",
+    )
+
+    ctx = await recall._get_cross_group_context(ev, "大家在聊啥呢")
+    assert "[隔壁群实时动态 · 串门提醒]" in ctx
+    assert "今天食堂这红烧肉太腻了" in ctx
+    assert "四格蝶" in ctx

@@ -68,6 +68,19 @@ def window_for(expression: str, start: str, end: str, now: float):
 
 
 class ArchiveQueryService:
+    def _get_scope_label(self, row_conversation, current_conversation):
+        conv = str(row_conversation or "")
+        curr = str(current_conversation or "")
+        gid = conv.split(":")[-1] if ":" in conv else conv
+        curr_gid = curr.split(":")[-1] if ":" in curr else curr
+        if gid == curr_gid:
+            return "本群"
+        if gid == "909660891":
+            return "隔壁老群(909660891)"
+        if gid == "530216971":
+            return "隔壁新群(530216971)"
+        return f"关联群({gid})"
+
     def __init__(self, store, *, max_candidates=400, max_results=8000,
                  result_chars=24000, max_sessions=32, identity_aliases=""):
         self.store = store
@@ -196,7 +209,7 @@ class ArchiveQueryService:
     async def query(self, *, conversation, requester, question="", mode="lookup",
                     person="", person_role="about", keywords=None, time_range="",
                     start="", end="", cursor="", evidence_handle="", page_size=40,
-                    now=None, exclude_uid="", read_scopes=None, self_id=""):
+                    now=None, exclude_uid="", read_scopes=None, self_id="", domain="auto"):
         self.calls += 1
         scopes = tuple(sorted(set(read_scopes or (conversation,))))
         if len(question)>4000 or len(person)>200 or len(keywords or [])>24 or any(not isinstance(k,str) or len(k)>160 for k in keywords or []):
@@ -264,7 +277,9 @@ class ArchiveQueryService:
                 states[scope] = (epoch, generation, watermark)
             watermark = max(state[2] for state in states.values())
             accounts,ambiguous,hint_status = ([],False,"not_used") if mode in {"time_read","overview"} and not person else await self._person(conn,scopes,person,question)
-            resolved = {"original_question":question,"mode":mode,"conversation":conversation,
+            is_game_intent = domain == "game" or (domain == "auto" and bool(re.search(r"(修仙|宗门|炼丹|闭关|突破|灵石|境界|功法|签到|打劫)", question + " " + " ".join(keywords or []))))
+            resolved_domain = "game" if is_game_intent else "social"
+            resolved = {"original_question":question,"mode":mode,"conversation":conversation,"domain":resolved_domain,
                         "person":person,"person_role":person_role,"accounts":accounts,
                         "time_start":datetime.fromtimestamp(low,TZ).isoformat() if low is not None else None,
                         "time_end_exclusive":datetime.fromtimestamp(high,TZ).isoformat(),
@@ -374,7 +389,11 @@ class ArchiveQueryService:
                     capped_matches = min(len(matches), 4)
                     base_score = 8 * capped_matches + (12 if person_hit else 0)
                     target_is_this_bot = bool(person and person.isdigit() and person == row["sender_id"])
-                    if is_bot and not target_is_this_bot:
+                    is_game_trans = is_automated_game_transaction(body, role=row["role"])
+                    if resolved_domain == "game" and is_game_trans:
+                        # 群友明确查修仙等游戏：游戏事务不打折，正常高分召回
+                        score = base_score + 10
+                    elif is_bot and not target_is_this_bot:
                         score = (base_score * 0.2) - 20
                     else:
                         score = base_score
@@ -466,7 +485,7 @@ class ArchiveQueryService:
                     "next_text_handle":snapshot["token"]+":"+str(index)+":"+str(next_offset) if next_offset<len(text) else None,"text_offset":text_offset,"sender_id":row["sender_id"],
                     "empty_text":not text,
                     "sender_name":row["nickname"],"role":row["role"],"time":datetime.fromtimestamp(clock,TZ).isoformat() if clock else None,
-                    "time_quality":row["time_quality"],"source_state":row["state"],"text":prefix + text[text_offset:next_offset],"truncated":len(text)>next_offset,
+                    "time_quality":row["time_quality"],"source_state":row["state"],"text":prefix + text[text_offset:next_offset],"source_label":self._get_scope_label(row["conversation"], conversation),"is_current_conversation":bool(row["conversation"] == conversation),"truncated":len(text)>next_offset,
                     "hit_reasons":snapshot["reasons"].get(uid,[]),"mentions":json.loads(row["mentions"]),
                     "context_only":bool("person_context_candidate" in snapshot["reasons"].get(uid,[]) or (snapshot["low"] is not None and (clock is None or not snapshot["low"]<=clock<snapshot["high"])) or
                         (snapshot["resolved"]["person_role"]=="speaker" and snapshot["resolved"]["accounts"] and row["sender_id"] not in [a["account_id"] for a in snapshot["resolved"]["accounts"]])),

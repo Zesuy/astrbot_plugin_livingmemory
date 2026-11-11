@@ -573,3 +573,71 @@ async def test_bot_spam_long_template_is_penalized_below_human(store):
     # 机器人的发言由于被判定为非目标 Bot，被打折并排在后面
     assert result['messages'][1]['source_uid'] == 'bot_msg'
     assert result['messages'][1]['sender_id'] == '2292937107'
+
+
+@pytest.mark.asyncio
+async def test_target_group_parameter_selects_current_vs_all_shared(store):
+    """Verify target_group selects current group only vs all shared groups."""
+    cfg = {"filtering_settings": {"shared_group_scopes": "530216971, 909660891"}}
+    store.config = cfg
+    
+    # 老群消息
+    await store.archive_record(record('old_1', '老群往事CS', person='u100', scope='qq:GroupMessage:909660891', stamp=NOW-200))
+    # 新群消息
+    await store.archive_record(record('new_1', '新群往事股市亏钱', person='u100', scope='qq:GroupMessage:530216971', stamp=NOW-100))
+    
+    service = ArchiveQueryService(store)
+    
+    # 1. 默认查当前群 (新群)
+    res_current = await service.query(
+        conversation='qq:GroupMessage:530216971',
+        read_scopes=('qq:GroupMessage:530216971',),
+        requester='reader',
+        question='往事',
+        mode='lookup',
+        now=NOW
+    )
+    uids_current = [m['source_uid'] for m in res_current['messages']]
+    assert 'new_1' in uids_current
+    assert 'old_1' not in uids_current
+    assert res_current['messages'][0]['source_label'] == '本群'
+    assert res_current['messages'][0]['is_current_conversation'] is True
+
+    # 2. 查两群联合 (all_shared)
+    res_all = await service.query(
+        conversation='qq:GroupMessage:530216971',
+        read_scopes=('qq:GroupMessage:530216971', 'qq:GroupMessage:909660891'),
+        requester='reader',
+        question='往事',
+        mode='lookup',
+        now=NOW
+    )
+    uids_all = [m['source_uid'] for m in res_all['messages']]
+    assert 'new_1' in uids_all
+    assert 'old_1' in uids_all
+    old_msg = next(m for m in res_all['messages'] if m['source_uid'] == 'old_1')
+    assert old_msg['source_label'] == '隔壁老群(909660891)'
+    assert old_msg['is_current_conversation'] is False
+
+
+@pytest.mark.asyncio
+async def test_domain_game_retrieves_xiuxian_transactions_accurately(store):
+    """Verify that domain=game accurately retrieves xiuxian commands and receipts without bot penalty."""
+    await store.archive_record(record('cmd_1', '/修仙 闭关', person='u100', stamp=NOW-200))
+    await store.archive_record(record('receipt_1', '【闭关结算】道友闭关成功，修为+5000', person='bot_99', stamp=NOW-190))
+    
+    service = ArchiveQueryService(store)
+    res = await service.query(
+        conversation='qq:group:1',
+        requester='reader',
+        question='我昨天闭关成功了吗',
+        keywords=['闭关', '修仙'],
+        domain='game',
+        now=NOW
+    )
+    
+    uids = [m['source_uid'] for m in res['messages']]
+    assert 'cmd_1' in uids
+    assert 'receipt_1' in uids
+    receipt_msg = next(m for m in res['messages'] if m['source_uid'] == 'receipt_1')
+    assert '修为+5000' in receipt_msg['text']
