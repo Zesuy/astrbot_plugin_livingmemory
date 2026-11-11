@@ -183,22 +183,27 @@ class MemoryRecall:
                     )
                     await self.message_utils.enforce_message_limit(session_id)
 
-                # Beta 自主回忆规则：独立于自动召回是否命中；即使 top_k=0
+                # Beta 自主回忆规则：独立于被动注入开关与自动召回是否命中；即使 top_k=0
                 # 也可为当前请求可用的主动工具提供规则说明。
                 self._maybe_inject_agent_recall_policy(req, session_id)
 
-                # 若 top_k <= 0，跳过记忆检索和注入，但上述清理和消息存储已执行
+                cross_group_ctx = await self._get_cross_group_context(event, actual_query)
+
+                # 只控制被动长期召回，保留近况、认知契约与主动检索工具。
+                passive_injection_enabled = self.config_manager.get(
+                    "recall_engine.passive_injection_enabled", False
+                )
                 top_k = self.config_manager.get("recall_engine.top_k", 5)
-                if top_k <= 0:
+                if not passive_injection_enabled or top_k <= 0:
                     logger.info(
-                        f"[{session_id}] top_k={top_k} <= 0，跳过记忆检索和注入"
+                        f"[{session_id}] 被动长期记忆注入已禁用，跳过搜索，保持纯净上下文"
                     )
-                    self._inject_clean_context(event, req, [], dialogue_snapshot)
+                    self._inject_clean_context(event, req, [], dialogue_snapshot, cross_group_context=cross_group_ctx)
                     return
 
                 if not actual_query:
                     logger.warning(f"[{session_id}] 原始用户消息为空，跳过记忆召回")
-                    self._inject_clean_context(event, req, [], dialogue_snapshot)
+                    self._inject_clean_context(event, req, [], dialogue_snapshot, cross_group_context=cross_group_ctx)
                     return
 
                 # 获取过滤配置
@@ -320,10 +325,8 @@ class MemoryRecall:
                             f"{injection_method}: {fallback_reason}"
                         )
 
-                    cross_group_ctx = await self._get_cross_group_context(event, actual_query)
                     self._inject_clean_context(event, req, memory_list, dialogue_snapshot, cross_group_context=cross_group_ctx)
                 else:
-                    cross_group_ctx = await self._get_cross_group_context(event, actual_query)
                     self._inject_clean_context(event, req, [], dialogue_snapshot, cross_group_context=cross_group_ctx)
                     logger.info(f"[{session_id}] 未找到相关记忆")
 

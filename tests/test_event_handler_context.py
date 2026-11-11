@@ -46,6 +46,7 @@ async def test_system_prompt_auto_falls_back_to_extra_user_content(
         config_manager=ConfigManager(
             {
                 "recall_engine": {
+                    "passive_injection_enabled": True,
                     "top_k": 3,
                     "injection_method": "system_prompt",
                 },
@@ -122,6 +123,7 @@ async def test_context_expansion_enriches_query(
         config_manager=ConfigManager(
             {
                 "recall_engine": {
+                    "passive_injection_enabled": True,
                     "top_k": 3,
                     "injection_method": "extra_user_content",
                     "inject_with_recent_context": True,
@@ -190,6 +192,7 @@ async def test_context_expansion_excludes_stale_and_undated_messages(
         config_manager=ConfigManager(
             {
                 "recall_engine": {
+                    "passive_injection_enabled": True,
                     "top_k": 3,
                     "inject_with_recent_context": True,
                     "recent_context_max_age_seconds": 7200,
@@ -230,6 +233,7 @@ async def test_context_expansion_skips_when_empty(
         config_manager=ConfigManager(
             {
                 "recall_engine": {
+                    "passive_injection_enabled": True,
                     "top_k": 3,
                     "injection_method": "extra_user_content",
                     "inject_with_recent_context": True,
@@ -359,7 +363,7 @@ def _window_handler(
         context=Mock(),
         config_manager=ConfigManager(
             {
-                "recall_engine": {"top_k": 3, "injection_method": "extra_user_content"},
+                "recall_engine": {"passive_injection_enabled": True, "top_k": 3, "injection_method": "extra_user_content"},
                 "reflection_engine": {"summary_trigger_rounds": 1, **reflection_cfg},
                 "session_manager": {"max_messages_per_session": 100},
             }
@@ -458,7 +462,7 @@ async def test_cross_group_chatter_detection_and_injection():
     now = time.time()
     cfg = ConfigManager({
         "filtering_settings": {"shared_group_scopes": "530216971, 909660891"},
-        "recall_engine": {"injection_method": "extra_user_content"}
+        "recall_engine": {"passive_injection_enabled": True, "injection_method": "extra_user_content"}
     })
 
     # 模拟数据库查询返回该用户在隔壁老群 3 分钟前的发言

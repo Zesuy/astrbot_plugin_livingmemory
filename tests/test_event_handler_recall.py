@@ -111,7 +111,7 @@ async def test_enforce_message_limit_uses_cleanup_batch_size(
         context=Mock(),
         config_manager=ConfigManager(
             {
-                "recall_engine": {"top_k": 3, "injection_method": "extra_user_content"},
+                "recall_engine": {"passive_injection_enabled": True, "top_k": 3, "injection_method": "extra_user_content"},
                 "reflection_engine": {"summary_trigger_rounds": 1},
                 "session_manager": {
                     "max_messages_per_session": 100,
@@ -201,6 +201,7 @@ async def test_handle_memory_recall_injection_user_message_before(
         config_manager=ConfigManager(
             {
                 "recall_engine": {
+                    "passive_injection_enabled": True,
                     "top_k": 3,
                     "injection_method": "user_message_before",
                 },
@@ -250,6 +251,7 @@ async def test_handle_memory_recall_injection_user_message_after(
         config_manager=ConfigManager(
             {
                 "recall_engine": {
+                    "passive_injection_enabled": True,
                     "top_k": 3,
                     "injection_method": "user_message_after",
                 },

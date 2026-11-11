@@ -139,6 +139,7 @@ def test_settings_allowed_paths_exclude_host_config_and_include_new_options() ->
     assert "memory_dedup.enabled" in allowed
     assert "memory_dedup.similarity_threshold" in allowed
     assert "recall_engine.top_k" in allowed
+    assert "recall_engine.passive_injection_enabled" in allowed
     assert "provider_settings.embedding_provider_id" not in allowed
     assert "bot_language" not in allowed
 
@@ -158,6 +159,9 @@ def test_settings_fields_are_localized_and_carry_values() -> None:
         sections[group] = fields
 
     recall = {field["path"]: field for field in sections["recall_engine"]}
+    passive = recall["recall_engine.passive_injection_enabled"]
+    assert passive["value"] is False
+    assert passive["type"] == "bool"
     top_k = recall["recall_engine.top_k"]
     assert top_k["value"] == 5
     assert top_k["type"] == "int"
@@ -204,6 +208,18 @@ async def test_settings_routes_read_and_update_config() -> None:
     assert payload["data"]["values"]["recall_engine.top_k"] == 7
     assert raw.saved == 1
     assert manager.get("recall_engine.top_k") == 7
+
+    for enabled in (True, False):
+        response = await client.post(
+            "/config/update",
+            json={"values": {"recall_engine.passive_injection_enabled": enabled}},
+        )
+        payload = await response.get_json()
+        assert payload["status"] == "ok"
+        assert payload["data"]["values"]["recall_engine.passive_injection_enabled"] is enabled
+        assert manager.get("recall_engine.passive_injection_enabled") is enabled
+        assert raw["recall_engine"]["passive_injection_enabled"] is enabled
+    assert raw.saved == 3
 
     response = await client.post(
         "/config/update",

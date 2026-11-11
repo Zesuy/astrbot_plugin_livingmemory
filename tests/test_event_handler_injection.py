@@ -87,6 +87,7 @@ async def test_handle_memory_recall_injection_fake_tool_call(handler, memory_eng
         config_manager=ConfigManager(
             {
                 "recall_engine": {
+                    "passive_injection_enabled": True,
                     "top_k": 3,
                     "injection_method": "fake_tool_call",
                 },
@@ -237,6 +238,7 @@ async def test_handle_memory_recall_fake_tool_call_fallback_on_gemini(
         config_manager=ConfigManager(
             {
                 "recall_engine": {
+                    "passive_injection_enabled": True,
                     "top_k": 3,
                     "injection_method": "fake_tool_call",
                 },
@@ -290,6 +292,7 @@ async def test_handle_memory_recall_deprecated_modes_do_not_fetch_provider(
         config_manager=ConfigManager(
             {
                 "recall_engine": {
+                    "passive_injection_enabled": True,
                     "top_k": 3,
                     "injection_method": "fake_tool_call",
                 },
@@ -341,6 +344,7 @@ async def test_handle_memory_recall_fake_tool_call_fallback_logs_once(
         config_manager=ConfigManager(
             {
                 "recall_engine": {
+                    "passive_injection_enabled": True,
                     "top_k": 3,
                     "injection_method": "fake_tool_call",
                 },
@@ -395,6 +399,7 @@ async def test_handle_memory_recall_injection_fake_tool_call_deepseek_v4(
         config_manager=ConfigManager(
             {
                 "recall_engine": {
+                    "passive_injection_enabled": True,
                     "top_k": 3,
                     "injection_method": "fake_tool_call_deepseek_v4",
                 },
@@ -459,6 +464,7 @@ async def test_handle_memory_recall_injection_fake_tool_call_deepseek_v4_on_gemi
         config_manager=ConfigManager(
             {
                 "recall_engine": {
+                    "passive_injection_enabled": True,
                     "top_k": 3,
                     "injection_method": "fake_tool_call_deepseek_v4",
                 },
@@ -518,6 +524,7 @@ async def test_handle_memory_recall_deepseek_v4_alias_falls_back_when_provider_l
         config_manager=ConfigManager(
             {
                 "recall_engine": {
+                    "passive_injection_enabled": True,
                     "top_k": 3,
                     "injection_method": "fake_tool_call_deepseek_v4",
                 },
@@ -573,6 +580,7 @@ async def test_handle_memory_recall_non_fake_modes_do_not_fetch_provider(
         config_manager=ConfigManager(
             {
                 "recall_engine": {
+                    "passive_injection_enabled": True,
                     "top_k": 3,
                     "injection_method": "user_message_before",
                 },
@@ -619,7 +627,7 @@ def _make_handler_with_top_k_0(memory_engine, memory_processor, conversation_man
         context=Mock(),
         config_manager=ConfigManager(
             {
-                "recall_engine": {"top_k": 0, "injection_method": "system_prompt"},
+                "recall_engine": {"passive_injection_enabled": True, "top_k": 0, "injection_method": "system_prompt"},
                 "reflection_engine": {"summary_trigger_rounds": 1},
                 "session_manager": {"max_messages_per_session": 100},
             }

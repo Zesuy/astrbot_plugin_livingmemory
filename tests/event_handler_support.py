@@ -93,7 +93,7 @@ def handler(memory_engine, memory_processor, conversation_manager):
         context=Mock(),
         config_manager=ConfigManager(
             {
-                "recall_engine": {"top_k": 3, "injection_method": "extra_user_content"},
+                "recall_engine": {"passive_injection_enabled": True, "top_k": 3, "injection_method": "extra_user_content"},
                 "reflection_engine": {"summary_trigger_rounds": 1},
                 "session_manager": {"max_messages_per_session": 100},
             }
@@ -165,6 +165,7 @@ async def _make_real_handler(tmp_path, memory_engine=None):
         config_manager=ConfigManager(
             {
                 "recall_engine": {
+                    "passive_injection_enabled": True,
                     "top_k": 3,
                     "injection_method": "extra_user_content",
                 },

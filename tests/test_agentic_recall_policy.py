@@ -15,7 +15,7 @@ POLICY_FOOTER = "</Agent-Recall-Policy>"
 def _config(**agent_tools):
     return ConfigManager(
         {
-            "recall_engine": {"top_k": 3, "injection_method": "extra_user_content"},
+            "recall_engine": {"passive_injection_enabled": True, "top_k": 3, "injection_method": "extra_user_content"},
             "reflection_engine": {"summary_trigger_rounds": 1},
             "session_manager": {"max_messages_per_session": 100},
             "agent_tools": agent_tools,
@@ -24,7 +24,7 @@ def _config(**agent_tools):
 
 
 def _make_handler(agent_tools, **recall_engine):
-    recall_cfg = {"top_k": 3, "injection_method": "extra_user_content"}
+    recall_cfg = {"passive_injection_enabled": True, "top_k": 3, "injection_method": "extra_user_content"}
     recall_cfg.update(recall_engine)
     config_manager = ConfigManager(
         {
@@ -247,7 +247,7 @@ class TestPolicyInjection:
         )
         handler._memory_recall.config_manager = ConfigManager(
             {
-                "recall_engine": {"top_k": 3, "injection_method": "extra_user_content"},
+                "recall_engine": {"passive_injection_enabled": True, "top_k": 3, "injection_method": "extra_user_content"},
                 "reflection_engine": {"summary_trigger_rounds": 1},
                 "session_manager": {"max_messages_per_session": 100},
                 "agent_tools": {

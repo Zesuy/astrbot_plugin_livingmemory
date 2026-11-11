@@ -121,7 +121,7 @@ async def test_tool_and_automatic_injection_preserve_the_same_live_name(atom_eng
     memories = await engine._apply_atom_policy([_result()])
     search_engine = SimpleNamespace(search_memories=AsyncMock(return_value=memories))
     config = ConfigManager({
-        "recall_engine": {"top_k": 1, "inject_with_recent_context": False},
+        "recall_engine": {"passive_injection_enabled": True, "top_k": 1, "inject_with_recent_context": False},
         "filtering_settings": {"use_persona_filtering": False},
     })
     event = Mock(unified_msg_origin="test:GroupMessage:group-1")

@@ -125,7 +125,7 @@ async def test_capture_is_plain_only_and_independent_of_archiving(enabled):
 async def test_unified_temp_injection_and_repeat_hook_dedup(top_k, auto_remove):
     config = ConfigManager(
         {
-            "recall_engine": {"top_k": top_k, "auto_remove_injected": auto_remove},
+            "recall_engine": {"passive_injection_enabled": True, "top_k": top_k, "auto_remove_injected": auto_remove},
             "filtering_settings": {"use_persona_filtering": False},
         }
     )
@@ -181,7 +181,7 @@ async def test_unified_temp_injection_and_repeat_hook_dedup(top_k, auto_remove):
 
 @pytest.mark.asyncio
 async def test_private_and_disabled_group_do_not_leak_dialogue():
-    config = ConfigManager({"recall_engine": {"top_k": 0}})
+    config = ConfigManager({"recall_engine": {"passive_injection_enabled": True, "top_k": 0}})
     event = group_event()
     event.get_message_type.return_value = MessageType.FRIEND_MESSAGE
     recall = MemoryRecall(

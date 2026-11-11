@@ -43,6 +43,10 @@ class SessionManagerConfig(BaseModel):
 class RecallEngineConfig(BaseModel):
     """回忆引擎配置"""
 
+    passive_injection_enabled: bool = Field(
+        default=False,
+        description="是否在每轮对话前被动搜索并注入长期记忆。禁用时上下文极其纯净，引导模型按需主动调用工具检索",
+    )
     top_k: int = Field(
         default=5, ge=0, le=50, description="返回记忆数量。设为 0 则跳过自动召回和注入"
     )

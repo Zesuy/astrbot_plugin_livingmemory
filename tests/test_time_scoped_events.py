@@ -158,7 +158,7 @@ async def test_event_sources_override_write_time_and_reject_crossing_summary(evi
 async def test_old_injection_and_recall_do_not_route_time_questions_to_events(monkeypatch):
     evidence={'window':{},'coverage':{'complete':False},'events':[],'raw_messages':[]}
     engine=SimpleNamespace(recall_events_window=AsyncMock(return_value=evidence),search_memories=AsyncMock(return_value=[]))
-    config=ConfigManager({'recall_engine':{'inject_with_recent_context':True},'filtering_settings':{'use_persona_filtering':False}})
+    config=ConfigManager({'recall_engine':{'passive_injection_enabled':True,'inject_with_recent_context':True},'filtering_settings':{'use_persona_filtering':False}})
     event=Mock(unified_msg_origin='g1')
     event.get_message_str.return_value='昨晚发生什么'
     event.get_message_type.return_value=MessageType.GROUP_MESSAGE
