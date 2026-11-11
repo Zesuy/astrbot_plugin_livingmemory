@@ -476,33 +476,30 @@ class MemoryProcessor(MemoryProcessorParseMixin, MemoryProcessorBuildMixin):
         if not messages:
             raise ValueError("消息列表不能为空")
 
-        # 检查是否全部为机器人刷屏（无真人消息参与）
-        from ..source_policy import is_bot_account
-        human_messages = [
-            m for m in messages
-            if getattr(m, "role", "user") != "assistant"
-            and not is_bot_account(getattr(m, "sender_id", ""), self.config)
-            and not getattr(m, "is_bot", False)
-        ]
-        if not human_messages:
+        # 提取真正的真人社交消息，过滤纯修仙/游戏指令与回执报表
+        from ..automation_policy import filter_social_messages
+        social_messages, counts = filter_social_messages(messages, self.config)
+        if not social_messages:
             logger.info(
-                f"[MemoryProcessor] 检测到纯机器人刷屏切片（总消息数={len(messages)}，真人消息=0），安全跳过记忆生成"
+                f"[MemoryProcessor] 检测到纯人机游戏/修仙刷屏切片（总消息数={len(messages)}，有效真人社交=0，过滤指令={counts['filtered_commands']}，过滤回执={counts['filtered_responses']}），安全跳过"
             )
             return "", {
                 "processing_status": "processed_no_memory",
-                "no_memory_reason": "bot_spam_only",
+                "no_memory_reason": "automation_only",
                 "summary_quality": "low",
                 "events": [],
                 "key_facts": [],
+                "activity_filter": counts,
             }, 0.0
 
-        # 1. 格式化对话历史
+        # 1. 格式化有效社交对话历史（排除修仙与游戏报表噪音）
+        target_messages = social_messages
         event_mode = self.config.get("summary_mode", "events") == "events"
         if event_mode:
             from ..utils.event_memory import event_source_payload
-            conversation_text = json.dumps(event_source_payload(messages), ensure_ascii=False)
+            conversation_text = json.dumps(event_source_payload(target_messages), ensure_ascii=False)
         else:
-            conversation_text = self._format_conversation(messages)
+            conversation_text = self._format_conversation(target_messages)
 
         # 2. 选择合适的提示词模板（每次从 PromptManager 读取，确保 WebUI 保存后立即生效）
         # 使用 replace 而非 format，避免对话内容中的大括号导致解析错误
@@ -541,7 +538,7 @@ class MemoryProcessor(MemoryProcessorParseMixin, MemoryProcessorBuildMixin):
             events = []
             if event_mode:
                 from ..utils.event_memory import normalize_events, event_line
-                events = normalize_events(structured_data.get("events"), messages)
+                events = normalize_events(structured_data.get("events"), target_messages)
                 if events:
                     structured_data["canonical_summary"] = "\n".join(event_line(event) for event in events)
                     structured_data["summary"] = structured_data["canonical_summary"]
@@ -575,10 +572,8 @@ class MemoryProcessor(MemoryProcessorParseMixin, MemoryProcessorBuildMixin):
             if event_mode and events:
                 content = structured_data["canonical_summary"]
                 metadata["persona_summary"] = ""
-            metadata["participant_identities"] = self._extract_participant_identities(
-                messages
-            )
-            content = self._apply_source_time_tags(content, metadata, messages)
+            metadata["participant_identities"] = self._extract_participant_identities(target_messages)
+            content = self._apply_source_time_tags(content, metadata, target_messages)
             # 将质量标记写入 metadata
             metadata["summary_quality"] = structured_data.get("_quality", "normal")
             if event_mode:

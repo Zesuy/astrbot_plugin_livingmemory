@@ -98,14 +98,22 @@ class GroupCapture:
                     content = "[提及]"
                 if not content.strip() and reply_info:
                     content = "[回复]"
+                from ..source_policy import is_bot_account
+                from ..automation_policy import is_automated_game_transaction
+                sender_id = event.get_sender_id()
+                is_bot = is_bot_account(sender_id, self.config_manager, event.get_self_id())
+                if is_automated_game_transaction(content, is_bot=is_bot):
+                    is_bot = True
                 self.dialogue_buffer.add_message(
                     event.unified_msg_origin,
                     event.get_sender_name(),
-                    event.get_sender_id(),
+                    sender_id,
                     content,
                     message_id=dialogue_event_id(event),
                     timestamp=getattr(event.message_obj, "timestamp", None),
-                    mention_ids=tuple(dict.fromkeys(mentions)), **reply_info,
+                    mention_ids=tuple(dict.fromkeys(mentions)),
+                    is_bot=is_bot,
+                    **reply_info,
                 )
             if not self.config_manager.get(
                 "session_manager.enable_full_group_capture", True

@@ -95,6 +95,12 @@ def scan(connection: sqlite3.Connection) -> tuple[list[dict], int]:
             reasons.add("bot_spam")
             protected = False
 
+        # 纯修仙与游戏数值指令报表判定：即使带 discussion 也不解封
+        _XIUXIAN_SPAM = re.compile(r"(?:修为[+-]\d+|灵石[+-]\d+|突破至(?:金丹|元婴|筑基|化神)|闭关结算|炼制(?:聚气丹|洗髓丹)|天道结晶|宗门任务结算)", re.I)
+        if _XIUXIAN_SPAM.search(summary + " " + event_text):
+            reasons.add("game_transaction_spam")
+            protected = False
+
         noise = bool(reasons) and "mixed_content" not in reasons and not protected
         candidates.append({"id": identity, "before": raw, "metadata": metadata,
                            "noise": noise, "rules": sorted(reasons)})

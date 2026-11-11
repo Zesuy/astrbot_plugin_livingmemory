@@ -364,11 +364,13 @@ class ArchiveQueryService:
                         reasons.append("literal_name_mention")
                     hit_reasons[row["uid"]] = reasons
                     from ..source_policy import is_bot_account
+                    from ..automation_policy import is_automated_game_transaction
                     cfg_obj = getattr(self.store, "config", None)
                     is_bot = (row["role"] == "assistant" or
                               (self_id and row["sender_id"] == self_id) or
                               ("is_bot" in row.keys() and bool(row["is_bot"])) or
-                              is_bot_account(row["sender_id"], cfg_obj, self_id))
+                              is_bot_account(row["sender_id"], cfg_obj, self_id) or
+                              is_automated_game_transaction(body, role=row["role"], is_bot=bool(row["role"] == "assistant")))
                     capped_matches = min(len(matches), 4)
                     base_score = 8 * capped_matches + (12 if person_hit else 0)
                     target_is_this_bot = bool(person and person.isdigit() and person == row["sender_id"])

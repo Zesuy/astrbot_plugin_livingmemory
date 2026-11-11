@@ -2,6 +2,7 @@
 Tests for MemoryProcessor.
 """
 
+import json
 import tempfile
 from datetime import datetime
 from types import SimpleNamespace
@@ -759,5 +760,106 @@ async def test_process_conversation_skips_pure_bot_spam_without_llm():
     content, metadata, importance = await processor.process_conversation(bot_messages, is_group_chat=True)
     assert content == ""
     assert metadata["processing_status"] == "processed_no_memory"
-    assert metadata["no_memory_reason"] == "bot_spam_only"
+    assert metadata["no_memory_reason"] in ("automation_only", "bot_spam_only")
     assert importance == 0.0
+
+
+@pytest.mark.asyncio
+async def test_process_conversation_skips_human_bot_xiuxian_pairs():
+    """Verify that human command -> bot response pairs (e.g. /修仙) are skipped without calling LLM."""
+    processor = MemoryProcessor(llm_provider=None, context=None)
+    
+    # 模拟真实群聊中的人机修仙互刷：真人发指令 -> 机器人回面板报表
+    xiuxian_messages = []
+    for i in range(15):
+        # 真人发送修仙指令
+        xiuxian_messages.append(
+            Message(
+                id=i*2,
+                session_id="group_xiuxian",
+                role="user",
+                content="/修仙 闭关" if i % 2 == 0 else "/我的灵石",
+                sender_id=f"human_{i%3}",
+                sender_name=f"道友{i%3}",
+                group_id="group_xiuxian",
+                platform="test",
+                metadata={},
+            )
+        )
+        # 机器人回复大属性报表
+        xiuxian_messages.append(
+            Message(
+                id=i*2 + 1,
+                session_id="group_xiuxian",
+                role="user",
+                content=f"【闭关结算】道友闭关成功，修为+{1000*i}，突破至筑基第{i}层，当前灵石: 50000",
+                sender_id="2292937107",
+                sender_name="修仙助手",
+                group_id="group_xiuxian",
+                platform="test",
+                metadata={},
+            )
+        )
+
+    content, metadata, importance = await processor.process_conversation(xiuxian_messages, is_group_chat=True)
+    assert content == ""
+    assert metadata["processing_status"] == "processed_no_memory"
+    assert metadata["no_memory_reason"] == "automation_only"
+    assert metadata["activity_filter"]["filtered_commands"] == 15
+    assert metadata["activity_filter"]["filtered_responses"] == 15
+    assert importance == 0.0
+
+
+@pytest.mark.asyncio
+async def test_process_conversation_filters_xiuxian_but_retains_real_human_chat():
+    """Verify that xiuxian commands are filtered out while real human social chatter is retained in the prompt."""
+    from unittest.mock import AsyncMock
+    mock_provider = AsyncMock()
+    # 模拟 LLM 正常返回结构化数据
+    mock_llm_json = json.dumps({
+        "summary": "张三提到他明天要去上海出差。",
+            "canonical_summary": "张三提到他明天要去上海出差。",
+        "events": [{"summary": "张三明天去上海出差", "kind": "plan", "source_refs": ["m0"]}],
+        "key_facts": ["张三明天出差上海"],
+        "quality": "normal"
+    })
+    mock_provider.text_chat = AsyncMock(return_value=SimpleNamespace(completion_text=mock_llm_json))
+
+    processor = MemoryProcessor(llm_provider=mock_provider, context=None)
+    processor._get_current_llm_provider = AsyncMock(return_value=mock_provider)
+
+    # 构造混合切片：修仙指令 + 真实出差计划 + 修仙指令
+    mixed_messages = [
+        Message(id=1, session_id="g1", role="user", content="/修仙 突破", sender_id="u1", sender_name="张三", group_id="g1", platform="test", metadata={}),
+        Message(id=2, session_id="g1", role="user", content="【天道突破】恭喜突破成功，修为+9999", sender_id="bot1", sender_name="修仙Bot", group_id="g1", platform="test", metadata={}),
+        # 真实社交发言
+        Message(id=3, session_id="g1", role="user", content="我明天要去上海出差，下周才回来", sender_id="u1", sender_name="张三", group_id="g1", platform="test", timestamp=1794390000.0, metadata={}),
+        Message(id=4, session_id="g1", role="user", content="/我的灵石", sender_id="u2", sender_name="李四", group_id="g1", platform="test", metadata={}),
+        Message(id=5, session_id="g1", role="user", content="【灵石报表】当前灵石: 8888", sender_id="bot1", sender_name="修仙Bot", group_id="g1", platform="test", metadata={}),
+    ]
+
+    content, metadata, importance = await processor.process_conversation(mixed_messages, is_group_chat=True)
+    print("DEBUG RETURN: content=", repr(content), "metadata=", metadata, "importance=", importance)
+    # 验证 LLM 收到的 Prompt 中只包含真人出差发言，完全不包含 /修仙 和 修为+9999
+    prompt_sent = mock_provider.text_chat.call_args.kwargs.get("prompt") or mock_provider.text_chat.call_args[0][0]
+    assert "我明天要去上海出差" in prompt_sent
+    assert "/修仙 突破" not in prompt_sent
+    assert "修为+9999" not in prompt_sent
+    assert "出差" in content
+
+
+def test_natural_chatter_with_xiuxian_word_is_not_falsely_filtered():
+    """Verify that natural conversation containing '修仙' is not mistaken for a game command."""
+    from astrbot_plugin_livingmemory.core.automation_policy import is_automated_game_transaction, is_game_command
+    
+    # 正常人类随口调侃
+    assert is_game_command("我最近天天熬夜修仙打代码，快猝死了哈哈") is False
+    assert is_automated_game_transaction("我最近天天熬夜修仙打代码，快猝死了哈哈") is False
+    assert is_game_command("项目终于突破瓶颈了，太爽了") is False
+    assert is_automated_game_transaction("项目终于突破瓶颈了，太爽了") is False
+
+    # 真实的修仙指令与回执
+    assert is_game_command("/修仙 闭关") is True
+    assert is_game_command("！修仙 炼丹") is True
+    assert is_game_command("#我的灵石") is True
+    assert is_automated_game_transaction("【天道突破】修为+5000，当前突破至金丹期") is True
