@@ -435,14 +435,15 @@ class MemoryEngineCrudMixin:
             return cached_results
 
         # 如果session_id是unified_msg_origin格式，自动触发旧数据迁移
-        if (
-            session_id
-            and isinstance(session_id, str)
-            and ":" in session_id
-            and not session_id.startswith("livingmemory:")
-        ):
-            # 异步触发迁移，不阻塞查询
-            self._create_tracked_task(self._migrate_session_data_if_needed(session_id))
+        sessions_to_check = (
+            [session_id] if isinstance(session_id, str)
+            else list(session_id) if isinstance(session_id, (tuple, list, set))
+            else []
+        )
+        for session in sessions_to_check:
+            if isinstance(session, str) and session and ":" in session and not session.startswith("livingmemory:"):
+                # 异步触发迁移，不阻塞查询
+                self._create_tracked_task(self._migrate_session_data_if_needed(session))
 
         # 【关键修改】不再提取UUID，直接使用完整的unified_msg_origin进行匹配
         # 因为现在数据库中存储的就是完整格式
