@@ -39,7 +39,10 @@ from astrbot.core.provider.provider import EmbeddingProvider
 
 class _DeterministicEmbeddingProvider(EmbeddingProvider):
     def __init__(self, dim: int = 24):
-        super().__init__({"id": "test-embedding", "type": "test"}, {})
+        try:
+            super().__init__({"id": "test-embedding", "type": "test"}, {})
+        except TypeError:
+            pass
         self._dim = dim
 
     async def get_embedding(self, text: str) -> list[float]:

@@ -540,3 +540,36 @@ async def test_bot_history_marked_by_role_or_dynamic_self_id_including_read(stor
     expanded = await service.query(conversation="qq:group:1", requester="reader", question="展开",
         mode="read", evidence_handle=rows["echo"]["evidence_handle"])
     assert expanded["messages"][0]["text"].startswith(marker)
+
+
+@pytest.mark.asyncio
+async def test_bot_spam_long_template_is_penalized_below_human(store):
+    """Verify that a bot's long keyword-stuffed template is penalized below a human's brief message."""
+    # 设置已知第三方 Bot
+    store.config = {"filtering_settings": {"bot_ids": "2292937107"}}
+    
+    # 人类群友发的简短消息：只包含关键词 '跑团'
+    await store.archive_record(record('human_msg', '今晚跑团去吗？', person='u100', nickname='人类群友', stamp=NOW-200))
+    
+    # 第三方机器人小入机发的超长堆词模板报表：包含跑团、角色、规则、骰点等海量词汇
+    bot_template = "【跑团战斗骰点结算报表】角色属性骰点成功，规则判定通过。本次跑团测试日志完成。"
+    await store.archive_record(record('bot_msg', bot_template, person='2292937107', nickname='小入机', stamp=NOW-100))
+    
+    service = ArchiveQueryService(store)
+    result = await service.query(
+        conversation='qq:group:1',
+        requester='reader',
+        question='今晚跑团怎么样',
+        keywords=['跑团', '角色', '规则'],
+        page_size=10,
+        now=NOW
+    )
+    
+    assert len(result['messages']) >= 2
+    # 人类发言由于未被惩罚，必须排在第 1 名
+    assert result['messages'][0]['source_uid'] == 'human_msg'
+    assert result['messages'][0]['sender_id'] == 'u100'
+    
+    # 机器人的发言由于被判定为非目标 Bot，被打折并排在后面
+    assert result['messages'][1]['source_uid'] == 'bot_msg'
+    assert result['messages'][1]['sender_id'] == '2292937107'

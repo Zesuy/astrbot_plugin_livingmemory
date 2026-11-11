@@ -531,3 +531,47 @@ async def test_malformed_relationships_never_drop_plain_capture(monkeypatch, mal
     assert "None" not in entries[0].mention_ids
     if malformed in {"missing_qq", "none_qq"}:
         assert "target-account" in entries[0].mention_ids
+
+
+def test_dialogue_buffer_bot_spam_quota_protection():
+    """Verify that high-volume bot spam cannot evict human messages below quota."""
+    buf = DialogueBuffer(max_messages=50)
+    session = "group:test:123"
+
+    # 1. 注入 45 条正常人类群友消息
+    for i in range(45):
+        buf.add_message(session, f"群友{i}", f"user_{i}", f"人类发言_{i}", message_id=f"h_{i}", is_bot=False)
+
+    recent = buf.get_recent(session, max_count=50)
+    assert len(recent) == 45
+    assert all(not e.is_bot for e in recent)
+
+    # 2. 机器人交替/狂刷 100 条长文本
+    long_report = "【跑团战斗骰点结算报表】" * 50  # 超长长报表
+    for i in range(100):
+        buf.add_message(session, "小入机", "bot_999", f"第{i}次刷屏: {long_report}", message_id=f"b_{i}", is_bot=True)
+
+    recent_after_spam = buf.get_recent(session, max_count=50)
+    # 总条数应严格限制在 50 条
+    assert len(recent_after_spam) == 50
+
+    human_entries = [e for e in recent_after_spam if not e.is_bot]
+    bot_entries = [e for e in recent_after_spam if e.is_bot]
+
+    # 人类消息 45 条必须完全健在，一条未丢！
+    assert len(human_entries) == 45
+    assert human_entries[0].content == "人类发言_0"
+    assert human_entries[-1].content == "人类发言_44"
+
+    # 机器人消息最多占 5 条配额 (50 * 0.1)
+    assert len(bot_entries) == 5
+    # 最新的机器人消息应在队列中
+    assert "第99次刷屏" in bot_entries[-1].content
+    # 长文本报表被安全截断在 200 字符内，并带有折叠提示
+    assert len(bot_entries[-1].content) <= 220
+    assert "…[长报表折叠]" in bot_entries[-1].content
+
+    # 3. 检查格式化输出
+    rendered = buf.format_for_context(session, max_count=50)
+    assert "(机器人)" in rendered
+    assert "人类发言_0" in rendered

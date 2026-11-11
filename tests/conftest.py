@@ -1,3 +1,15 @@
+import sys, types
+
+if 'networkx' not in sys.modules:
+    nx_mod = types.ModuleType('networkx')
+    nx_mod.Graph = type('Graph', (), {'add_node': lambda *a, **k: None, 'add_edge': lambda *a, **k: None})
+    sys.modules['networkx'] = nx_mod
+
+if 'quart' not in sys.modules:
+    quart_mod = types.ModuleType('quart')
+    quart_mod.request = type('Request', (), {})()
+    quart_mod.Response = type('Response', (), {})
+    sys.modules['quart'] = quart_mod
 """
 pytest 配置文件
 提供测试夹具和基础运行环境。
@@ -57,8 +69,18 @@ def _install_optional_dependency_stubs() -> None:
         import jieba  # type: ignore  # noqa: F401
     except Exception:
         jieba_mod = types.ModuleType("jieba")
-        jieba_mod.cut = lambda text, cut_all=False: list(text) if text else []
-        jieba_mod.lcut = lambda text, cut_all=False: list(text) if text else []
+        def _smart_cut(text, cut_all=False):
+            if not text:
+                return []
+            s = str(text)
+            if len(s) <= 4:
+                return [s]
+            parts = s.split()
+            if len(parts) > 1:
+                return parts
+            return [s[i:i+2] for i in range(0, len(s), 2)]
+        jieba_mod.cut = _smart_cut
+        jieba_mod.lcut = _smart_cut
         sys.modules["jieba"] = jieba_mod
 
     try:
@@ -191,16 +213,27 @@ def _install_astrbot_stubs() -> None:
             return True
 
     class EmbeddingProvider:
-        pass
+        def __init__(self, *args, **kwargs):
+            pass
 
     class Provider:
-        pass
+        def __init__(self, *args, **kwargs):
+            pass
 
     class SQLiteDatabase:
-        pass
+        def __init__(self, *args, **kwargs):
+            pass
 
     class FaissVecDB:
-        pass
+        def __init__(self, *args, **kwargs):
+            self.dimension = 24
+            self.index = type('Index', (), {'ntotal': 0})()
+            self.embedding_storage = type('EmbStorage', (), {'dimension': 24, 'index': type('Index', (), {'ntotal': 0})()})()
+            self.document_storage = None
+            self.embedding_provider = None
+
+        async def initialize(self):
+            pass
 
     class _BaseComponent:
         type = "component"

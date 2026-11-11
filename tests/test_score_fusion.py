@@ -146,3 +146,39 @@ async def test_rrf_fusion_mode_remains_selectable():
 
     assert retriever.fusion_mode == "rrf"
     assert len(results) == 2
+
+
+@pytest.mark.asyncio
+async def test_bot_spam_memory_is_penalized_and_capped():
+    """Verify that pure bot spam memory is penalized (0.2x) and capped at 0.35."""
+    now = time.time()
+    cfg = {"filtering_settings": {"bot_ids": "2292937107"}}
+
+    class _BM25:
+        async def search(self, query, k, session_id=None, persona_id=None):
+            return [
+                RRFBM25Result(doc_id=1, score=0.9, content="c1", metadata={"importance": 0.5, "create_time": now, "participant_identities": [{"sender_id": "human_1", "is_bot": False}]}),
+                RRFBM25Result(doc_id=2, score=1.0, content="c2", metadata={"importance": 0.5, "create_time": now, "participant_identities": [{"sender_id": "2292937107", "is_bot": True}]}),
+            ]
+
+    class _Vector:
+        async def search(self, query, k, session_id=None, persona_id=None):
+            return [
+                VectorResult(doc_id=1, score=0.9, content="c1", metadata={"importance": 0.5, "create_time": now, "participant_identities": [{"sender_id": "human_1", "is_bot": False}]}),
+                VectorResult(doc_id=2, score=1.0, content="c2", metadata={"importance": 0.5, "create_time": now, "participant_identities": [{"sender_id": "2292937107", "is_bot": True}]}),
+            ]
+
+    retriever = _retriever(cfg, _BM25(), _Vector())
+    results = await retriever.search("跑团", k=2)
+
+    assert len(results) == 2
+    # doc 1 是人类发言，doc 2 是纯机器人发言
+    doc1 = next(r for r in results if r.doc_id == 1)
+    doc2 = next(r for r in results if r.doc_id == 2)
+
+    # doc 2 被惩罚，最终得分低于 0.35
+    assert doc2.final_score <= 0.35
+    assert doc2.score_breakdown.get("bot_penalty") == 0.2
+    # 人类发言排在第一名
+    assert results[0].doc_id == 1
+    assert doc1.final_score > doc2.final_score

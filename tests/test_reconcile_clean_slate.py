@@ -260,3 +260,32 @@ async def test_collection_sessions_each_schedule_legacy_migration(tmp_path, cont
     assert await engine.search_memories("synthetic", session_id=sessions) == []
     await asyncio.gather(*engine._pending_tasks)
     assert {call.args[0] for call in engine._migrate_session_data_if_needed.await_args_list} == {"qq:GroupMessage:old", "qq:GroupMessage:new"}
+
+
+def test_pure_bot_spam_with_durable_words_remains_isolated(database):
+    """Verify that pure bot spam records (even containing durable words like 跑团) remain excluded."""
+    connection, _ = database
+    bot_metadata = {
+        "recall_exclusion_reason": "clean_slate_v290_migration",
+        "canonical_summary": "小入机与Bot连续输出跑团战斗骰点结算报表，测试自动指令。",
+        "participant_identities": [
+            {"sender_id": "2292937107", "display_name": "小入机", "is_bot": True},
+            {"sender_id": "3658276025", "display_name": "Bot", "is_bot": True}
+        ],
+        "events": [{"summary": "跑团骰点报表输出", "kind": "discussion"}]
+    }
+    connection.execute("INSERT INTO documents(id, text, metadata) VALUES(999, ?, ?)",
+                       ("跑团骰点报表", json.dumps(bot_metadata)))
+    connection.commit()
+
+    candidates, malformed = recovery.scan(connection)
+    bot_cand = next(c for c in candidates if c["id"] == 999)
+    assert bot_cand["noise"] is True
+    assert "bot_spam" in bot_cand["rules"]
+
+    outcome = recovery.apply(connection)
+    # 验证该记录保持 recall_excluded = 1，原因变为 audit_noise
+    row = connection.execute("SELECT metadata FROM documents WHERE id=999").fetchone()
+    meta = json.loads(row[0])
+    assert meta["recall_excluded"] == 1
+    assert meta["recall_exclusion_reason"] == "audit_noise"

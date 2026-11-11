@@ -476,6 +476,26 @@ class MemoryProcessor(MemoryProcessorParseMixin, MemoryProcessorBuildMixin):
         if not messages:
             raise ValueError("消息列表不能为空")
 
+        # 检查是否全部为机器人刷屏（无真人消息参与）
+        from ..source_policy import is_bot_account
+        human_messages = [
+            m for m in messages
+            if getattr(m, "role", "user") != "assistant"
+            and not is_bot_account(getattr(m, "sender_id", ""), self.config)
+            and not getattr(m, "is_bot", False)
+        ]
+        if not human_messages:
+            logger.info(
+                f"[MemoryProcessor] 检测到纯机器人刷屏切片（总消息数={len(messages)}，真人消息=0），安全跳过记忆生成"
+            )
+            return "", {
+                "processing_status": "processed_no_memory",
+                "no_memory_reason": "bot_spam_only",
+                "summary_quality": "low",
+                "events": [],
+                "key_facts": [],
+            }, 0.0
+
         # 1. 格式化对话历史
         event_mode = self.config.get("summary_mode", "events") == "events"
         if event_mode:

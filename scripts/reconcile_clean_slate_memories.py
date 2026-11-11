@@ -81,6 +81,20 @@ def scan(connection: sqlite3.Connection) -> tuple[list[dict], int]:
         protected = bool(_DURABLE.search(summary + " " + event_text)) or bool(set(event_kind_counts(classification_metadata)) - _NOISE_KINDS)
         if not protected and _ERROR.search(summary + " " + event_text):
             reasons.add("error")
+
+        # 纯机器人刷屏判定：所有参与者全为机器人，即使带保护词也绝不解封
+        participants = metadata.get("participant_identities") or []
+        known_bots = {"2292937107", "3658276025", "小入机", "Bot"}
+        is_pure_bot = False
+        if participants and isinstance(participants, list) and len(participants) > 0:
+            is_pure_bot = all(
+                bool(p.get("is_bot")) or str(p.get("sender_id", "")).strip() in known_bots or str(p.get("display_name", "")).strip() in known_bots
+                for p in participants if isinstance(p, dict)
+            )
+        if is_pure_bot:
+            reasons.add("bot_spam")
+            protected = False
+
         noise = bool(reasons) and "mixed_content" not in reasons and not protected
         candidates.append({"id": identity, "before": raw, "metadata": metadata,
                            "noise": noise, "rules": sorted(reasons)})

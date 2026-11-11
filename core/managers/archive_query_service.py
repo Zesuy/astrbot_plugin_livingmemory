@@ -165,8 +165,8 @@ class ArchiveQueryService:
         if not span[2]:
             return [], False
         low, high, total = span
-        if low is None:
-            rows = await conn.execute_fetchall("SELECT * FROM archive_messages WHERE " + where + " ORDER BY id LIMIT ?", [*params, limit])
+        if low is None or total <= limit or low == high:
+            rows = await conn.execute_fetchall("SELECT * FROM archive_messages WHERE " + where + " ORDER BY COALESCE(sent_at,saved_at) DESC, id DESC LIMIT ?", [*params, limit])
             return rows, total > limit
         rows = []
         buckets = []
@@ -363,7 +363,19 @@ class ArchiveQueryService:
                     if any(n in body for n in names):
                         reasons.append("literal_name_mention")
                     hit_reasons[row["uid"]] = reasons
-                    score = 8*len(matches)+(12 if person_hit else 0)-(20 if row["role"]=="assistant" or (self_id and row["sender_id"]==self_id) else 0)
+                    from ..source_policy import is_bot_account
+                    cfg_obj = getattr(self.store, "config", None)
+                    is_bot = (row["role"] == "assistant" or
+                              (self_id and row["sender_id"] == self_id) or
+                              ("is_bot" in row.keys() and bool(row["is_bot"])) or
+                              is_bot_account(row["sender_id"], cfg_obj, self_id))
+                    capped_matches = min(len(matches), 4)
+                    base_score = 8 * capped_matches + (12 if person_hit else 0)
+                    target_is_this_bot = bool(person and person.isdigit() and person == row["sender_id"])
+                    if is_bot and not target_is_this_bot:
+                        score = (base_score * 0.2) - 20
+                    else:
+                        score = base_score
                     ranked.append((score,row["id"],row))
                 ranked.sort(key=lambda x:(-x[0],-x[1]))
                 bounded = bounded or len(ranked)>24

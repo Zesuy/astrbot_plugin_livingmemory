@@ -275,7 +275,8 @@ class HybridRetriever:
                 item.rerank_score
                 if item.rerank_score is not None else item.rrf_score / max_rrf
             )
-            result.final_score = relevance
+            bot_penalty = result.score_breakdown.get("bot_penalty", 1.0)
+            result.final_score = min(relevance * bot_penalty, 0.35) if bot_penalty < 1.0 else relevance
             result.score_breakdown["agentic_relevance"] = relevance
             results.append(result)
         results.sort(key=lambda result: result.final_score, reverse=True)
@@ -432,7 +433,23 @@ class HybridRetriever:
                 + self.score_gamma * recency_weight
             )
 
+            # 来源惩罚：如果文档主要由 Bot 产生且无真人有效事件，进行惩罚与封顶
+            from ..source_policy import get_configured_bot_ids
+            bot_ids = get_configured_bot_ids(self.config)
+            participants = metadata.get("participant_identities") or []
+            is_pure_bot = False
+            if participants and isinstance(participants, list):
+                is_pure_bot = all(
+                    bool(p.get("is_bot")) or str(p.get("sender_id", "")).strip() in bot_ids
+                    for p in participants if isinstance(p, dict)
+                )
+            bot_penalty = 1.0
+            if metadata.get("is_bot_spam") or metadata.get("no_memory_reason") == "bot_spam_only" or is_pure_bot:
+                bot_penalty = 0.2
+                final_score = min(final_score * bot_penalty, 0.35)
+
             score_breakdown = {
+                "bot_penalty": bot_penalty,
                 "rrf_normalized": round(rrf_normalized, 4),
                 "importance": round(importance, 4),
                 "recency_weight": round(recency_weight, 4),

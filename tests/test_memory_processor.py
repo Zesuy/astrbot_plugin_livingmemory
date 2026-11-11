@@ -732,3 +732,32 @@ def test_format_conversation_uses_placeholder_for_image_only_group_message():
     assert "张三" in formatted
     assert "[图片消息]" in formatted
     assert "image_url" not in formatted
+
+
+@pytest.mark.asyncio
+async def test_process_conversation_skips_pure_bot_spam_without_llm():
+    """Verify that pure bot spam segments directly return processed_no_memory without calling LLM."""
+    cfg = {"filtering_settings": {"bot_ids": "2292937107, 88888"}}
+    processor = MemoryProcessor(llm_provider=None, context=None, config=cfg)
+    
+    # 模拟全是机器人的刷屏切片
+    bot_messages = [
+        Message(
+            id=i,
+            session_id="g1",
+            role="assistant" if i % 2 == 0 else "user",
+            content=f"跑团报表骰点战斗日志 {i}",
+            sender_id="2292937107" if i % 2 != 0 else "3658276025",
+            sender_name="小入机" if i % 2 != 0 else "Bot",
+            group_id="group1",
+            platform="test",
+            metadata={},
+        )
+        for i in range(10)
+    ]
+
+    content, metadata, importance = await processor.process_conversation(bot_messages, is_group_chat=True)
+    assert content == ""
+    assert metadata["processing_status"] == "processed_no_memory"
+    assert metadata["no_memory_reason"] == "bot_spam_only"
+    assert importance == 0.0
